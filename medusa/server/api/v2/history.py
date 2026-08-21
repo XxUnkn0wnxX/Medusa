@@ -21,6 +21,8 @@ from medusa.tv.series import Series, SeriesIdentifier
 log = BraceAdapter(logging.getLogger(__name__))
 log.logger.addHandler(logging.NullHandler())
 
+SQLITE_MAX_INTEGER = (1 << 63) - 1
+
 
 def _normalize_text_filter(value):
     """Normalize Episode or Provider text while preserving quoted boundary whitespace."""
@@ -59,6 +61,22 @@ def _parse_size_filter(value):
         return None
 
     return match.group('operator'), int(match.group('size')) * 1024 * 1024
+
+
+def _parse_series_identifier_slug(value):
+    """Return an identifier for an exact canonical series slug, if present."""
+    if not isinstance(value, str):
+        return None
+
+    slug = value.lower()
+    try:
+        identifier = SeriesIdentifier.from_slug(slug)
+    except (TypeError, ValueError):
+        return None
+    if identifier and identifier.id > SQLITE_MAX_INTEGER:
+        return None
+    if identifier and identifier.slug.lower() == slug:
+        return identifier
 
 
 class HistoryHandler(BaseRequestHandler):
@@ -175,6 +193,7 @@ class HistoryHandler(BaseRequestHandler):
         # Search resource with like %resource%
         if resource:
             (resource_title_filter, resource_season, resource_episode) = self._parse_episode_resource(resource)
+            resource_identifier = _parse_series_identifier_slug(resource_title_filter)
             like_resource_title = f'%%{resource_title_filter}%%'
             like_resource = f'%%{resource}%%'
             cte_query = """
@@ -186,9 +205,17 @@ class HistoryHandler(BaseRequestHandler):
                     SELECT indexer, series_id AS indexer_id
                     FROM scene_exceptions
                     WHERE LOWER(title) LIKE LOWER(?)
-                )
             """
             cte_params.extend([like_resource_title, like_resource_title])
+            if resource_identifier:
+                cte_query += """
+                    UNION
+                    SELECT ? AS indexer, ? AS indexer_id
+                """
+                cte_params.extend([resource_identifier.indexer.id, resource_identifier.id])
+            cte_query += """
+                )
+            """
             if resource_season is not None and resource_episode is not None:
                 where_with_ops += [
                     '(LOWER(resource) LIKE LOWER(?) OR EXISTS ('

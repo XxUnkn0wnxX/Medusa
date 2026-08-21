@@ -8,8 +8,9 @@ from types import SimpleNamespace
 from urllib.parse import parse_qsl, urlencode
 
 from medusa.common import DOWNLOADED, FAILED, Quality, SNATCHED
+from medusa.indexers.config import indexerConfig
 from medusa.server.api.v2 import history as history_module
-from medusa.tv.series import Series
+from medusa.tv.series import Series, SeriesIdentifier
 
 import pytest
 
@@ -77,6 +78,85 @@ def _insert_history_row(connection, action, resource, indexer_id=1, showid=101, 
     return connection.execute('SELECT last_insert_rowid()').fetchone()[0]
 
 
+def _insert_series_slug_row(connection, resource, action=DOWNLOADED, **kwargs):
+    kwargs.setdefault('indexer_id', PRIMARY_INDEXER_ID)
+    kwargs.setdefault('showid', PRIMARY_SHOWID)
+    return _insert_history_row(connection, action, resource, **kwargs)
+
+
+async def _fetch_series_slug_rows(fetch_history, resource_filter, **query_params):
+    response = await fetch_history(resource_filter, **query_params)
+    return response, json.loads(response.body)
+
+
+def _build_series_slug_cases():
+    cases = []
+    for indexer_id, config in sorted(indexerConfig.items()):
+        showid = 10000 + indexer_id
+        slug = SeriesIdentifier.from_id(indexer_id, showid).slug
+        cases.append((indexer_id, config['identifier'], showid, slug))
+    return tuple(cases)
+
+
+SERIES_SLUG_CASES = _build_series_slug_cases()
+PRIMARY_SERIES_SLUG_CASE = SERIES_SLUG_CASES[0]
+PRIMARY_INDEXER_ID, PRIMARY_INDEXER_NAME, PRIMARY_SHOWID, PRIMARY_SERIES_SLUG = PRIMARY_SERIES_SLUG_CASE
+IMDB_SERIES_SLUG_CASE = next(case for case in SERIES_SLUG_CASES if case[1] == 'imdb')
+
+SERIES_SLUG_VARIANTS = tuple(dict.fromkeys([
+    PRIMARY_SERIES_SLUG.lower(),
+    PRIMARY_SERIES_SLUG.upper(),
+    PRIMARY_SERIES_SLUG[:1].upper() + PRIMARY_SERIES_SLUG[1:],
+    '  {0}  '.format(PRIMARY_SERIES_SLUG),
+    "'{0}'".format(PRIMARY_SERIES_SLUG),
+    '"{0}"'.format(PRIMARY_SERIES_SLUG),
+    '`{0}`'.format(PRIMARY_SERIES_SLUG),
+    "'{0}".format(PRIMARY_SERIES_SLUG),
+    '"{0}'.format(PRIMARY_SERIES_SLUG),
+    '`{0}'.format(PRIMARY_SERIES_SLUG),
+    "{0}'".format(PRIMARY_SERIES_SLUG),
+    '{0}"'.format(PRIMARY_SERIES_SLUG),
+    '{0}`'.format(PRIMARY_SERIES_SLUG),
+    "'{0}\"".format(PRIMARY_SERIES_SLUG),
+]))
+
+SERIES_SLUG_GUARDS = (
+    (
+        'unknown{0}'.format(PRIMARY_SHOWID),
+        'unknown{0}.mkv'.format(PRIMARY_SHOWID),
+    ),
+    (PRIMARY_INDEXER_NAME, '{0}.mkv'.format(PRIMARY_INDEXER_NAME)),
+    (
+        '{0}-{1}'.format(PRIMARY_INDEXER_NAME, PRIMARY_SHOWID),
+        '{0}-{1}.mkv'.format(PRIMARY_INDEXER_NAME, PRIMARY_SHOWID),
+    ),
+    (
+        '{0}_{1}'.format(PRIMARY_INDEXER_NAME, PRIMARY_SHOWID),
+        '{0}_{1}.mkv'.format(PRIMARY_INDEXER_NAME, PRIMARY_SHOWID),
+    ),
+    (
+        '{0}junk'.format(PRIMARY_SERIES_SLUG),
+        '{0}junk.mkv'.format(PRIMARY_SERIES_SLUG),
+    ),
+    (
+        '{0}0{1}'.format(PRIMARY_INDEXER_NAME, PRIMARY_SHOWID),
+        '{0}0{1}.mkv'.format(PRIMARY_INDEXER_NAME, PRIMARY_SHOWID),
+    ),
+    (
+        'tt{0}'.format(IMDB_SERIES_SLUG_CASE[2]),
+        'tt{0}.mkv'.format(IMDB_SERIES_SLUG_CASE[2]),
+    ),
+    (
+        'imdbtt{0}'.format(IMDB_SERIES_SLUG_CASE[2]),
+        'imdbtt{0}.mkv'.format(IMDB_SERIES_SLUG_CASE[2]),
+    ),
+    (
+        '" {0} "'.format(PRIMARY_SERIES_SLUG),
+        ' {0} .mkv'.format(PRIMARY_SERIES_SLUG),
+    ),
+)
+
+
 @pytest.fixture
 def history_db(monkeypatch):
     connection = sqlite3.connect(':memory:', check_same_thread=False)
@@ -140,6 +220,284 @@ def fetch_history(http_client, create_url, auth_headers):
         return response
 
     return _fetch
+
+
+@pytest.mark.gen_test
+@pytest.mark.parametrize(
+    'indexer_id,indexer_name,showid,slug',
+    SERIES_SLUG_CASES,
+    ids=[case[1] for case in SERIES_SLUG_CASES]
+)
+async def test_series_slug_registry_selects_exact_identity(
+    history_db, fetch_history, indexer_id, indexer_name, showid, slug
+):
+    matching_row = _insert_series_slug_row(
+        history_db,
+        'series-slug-target.mkv',
+        indexer_id=indexer_id,
+        showid=showid
+    )
+    _insert_series_slug_row(
+        history_db,
+        'series-slug-wrong-indexer.mkv',
+        indexer_id=next(candidate for candidate in indexerConfig if candidate != indexer_id),
+        showid=showid
+    )
+    _insert_series_slug_row(
+        history_db,
+        'series-slug-wrong-show.mkv',
+        indexer_id=indexer_id,
+        showid=showid + 1
+    )
+
+    response, rows = await _fetch_series_slug_rows(fetch_history, slug)
+
+    assert response.code == 200
+    assert {row['id'] for row in rows} == {matching_row}
+
+
+@pytest.mark.gen_test
+@pytest.mark.parametrize('resource_filter', SERIES_SLUG_VARIANTS)
+async def test_series_slug_case_whitespace_wrappers_and_malformed_boundaries(
+    history_db, fetch_history, resource_filter
+):
+    matching_row = _insert_series_slug_row(history_db, 'series-slug-variant-target.mkv')
+    _insert_series_slug_row(history_db, 'series-slug-variant-wrong-show.mkv', showid=PRIMARY_SHOWID + 1)
+
+    _response, rows = await _fetch_series_slug_rows(fetch_history, resource_filter)
+
+    assert {row['id'] for row in rows} == {matching_row}
+
+
+@pytest.mark.gen_test
+@pytest.mark.parametrize('resource_filter,direct_resource', SERIES_SLUG_GUARDS)
+async def test_series_slug_strict_guards_preserve_direct_resource_matching(
+    history_db, fetch_history, resource_filter, direct_resource
+):
+    identity_row = _insert_series_slug_row(history_db, 'series-slug-guard-identity-only.mkv')
+    direct_row = _insert_series_slug_row(history_db, direct_resource, showid=PRIMARY_SHOWID + 1)
+
+    response, rows = await _fetch_series_slug_rows(fetch_history, resource_filter)
+
+    assert response.code == 200
+    assert identity_row not in {row['id'] for row in rows}
+    assert {row['id'] for row in rows} == {direct_row}
+
+
+@pytest.mark.gen_test
+async def test_series_slug_overlong_numeric_candidate_falls_back_without_server_error(
+    history_db, http_client, create_url, auth_headers
+):
+    _insert_series_slug_row(history_db, 'series-slug-overlong-identity-only.mkv')
+    overlong_slug = PRIMARY_INDEXER_NAME + ('9' * 5000)
+
+    response = await http_client.fetch(
+        _history_url(create_url, overlong_slug),
+        raise_error=False,
+        **auth_headers
+    )
+    rows = json.loads(response.body)
+
+    assert response.code == 200
+    assert rows == []
+
+
+@pytest.mark.gen_test
+async def test_series_slug_sqlite_overflow_falls_back_to_direct_resource_match(
+    history_db, fetch_history
+):
+    overflow_slug = '{0}{1}'.format(PRIMARY_INDEXER_NAME, 1 << 63)
+    direct_row = _insert_series_slug_row(
+        history_db,
+        '{0}.mkv'.format(overflow_slug),
+        showid=PRIMARY_SHOWID + 1
+    )
+
+    response, rows = await _fetch_series_slug_rows(fetch_history, overflow_slug)
+
+    assert response.code == 200
+    assert {row['id'] for row in rows} == {direct_row}
+
+
+@pytest.mark.gen_test
+async def test_series_slug_sqlite_maximum_selects_exact_identity(history_db, fetch_history):
+    sqlite_maximum = (1 << 63) - 1
+    maximum_slug = '{0}{1}'.format(PRIMARY_INDEXER_NAME, sqlite_maximum)
+    matching_row = _insert_series_slug_row(
+        history_db,
+        'series-slug-sqlite-maximum-identity.mkv',
+        showid=sqlite_maximum
+    )
+    _insert_series_slug_row(
+        history_db,
+        'series-slug-sqlite-maximum-wrong-indexer.mkv',
+        indexer_id=next(candidate for candidate in indexerConfig if candidate != PRIMARY_INDEXER_ID),
+        showid=sqlite_maximum
+    )
+    _insert_series_slug_row(
+        history_db,
+        'series-slug-sqlite-maximum-wrong-show.mkv',
+        showid=sqlite_maximum - 1
+    )
+
+    response, rows = await _fetch_series_slug_rows(fetch_history, maximum_slug)
+
+    assert response.code == 200
+    assert {row['id'] for row in rows} == {matching_row}
+
+
+@pytest.mark.gen_test
+async def test_numeric_episode_filter_remains_resource_text(history_db, fetch_history):
+    identity_row = _insert_series_slug_row(history_db, 'numeric-episode-identity-only.mkv')
+    direct_row = _insert_series_slug_row(
+        history_db,
+        'episode-{0}.mkv'.format(PRIMARY_SHOWID),
+        showid=PRIMARY_SHOWID + 1
+    )
+
+    response, rows = await _fetch_series_slug_rows(fetch_history, str(PRIMARY_SHOWID))
+
+    assert response.code == 200
+    assert identity_row not in {row['id'] for row in rows}
+    assert {row['id'] for row in rows} == {direct_row}
+
+
+@pytest.mark.gen_test
+async def test_series_slug_or_direct_resource_match(history_db, fetch_history):
+    identity_row = _insert_series_slug_row(history_db, 'series-slug-or-identity-only.mkv')
+    direct_row = _insert_series_slug_row(
+        history_db,
+        'unrelated-{0}.mkv'.format(PRIMARY_SERIES_SLUG),
+        showid=PRIMARY_SHOWID + 1
+    )
+
+    _response, rows = await _fetch_series_slug_rows(fetch_history, PRIMARY_SERIES_SLUG)
+
+    assert {row['id'] for row in rows} == {identity_row, direct_row}
+
+
+@pytest.mark.gen_test
+async def test_series_slug_rendered_episode_filter_targets_detailed_and_compact(
+    history_db, fetch_history
+):
+    target_row = _insert_series_slug_row(
+        history_db, 'series-slug-rendered-target.mkv', season=2, episode=7
+    )
+    _insert_series_slug_row(
+        history_db, 'series-slug-rendered-other.mkv', season=2, episode=8
+    )
+    resource_filter = '{0} - s02e07'.format(PRIMARY_SERIES_SLUG)
+
+    detailed_response, detailed_rows = await _fetch_series_slug_rows(fetch_history, resource_filter)
+    compact_response, compact_rows = await _fetch_series_slug_rows(
+        fetch_history, resource_filter, compact=True
+    )
+
+    assert {row['id'] for row in detailed_rows} == {target_row}
+    assert compact_response.headers['X-Pagination-Count'] == '1'
+    assert len(compact_rows) == 1
+    assert {row['id'] for row in compact_rows[0]['rows']} == {target_row}
+
+
+@pytest.mark.gen_test
+async def test_series_slug_filters_stack_with_pagination_and_compact_grouping(
+    history_db, fetch_history
+):
+    first_matching_row = _insert_series_slug_row(
+        history_db,
+        'series-slug-stack-match-one.mkv',
+        provider='Target Provider',
+        quality=Quality.HDTV,
+        size=8 * 1024 * 1024,
+        client_status=3,
+        date=1
+    )
+    later_matching_row = _insert_series_slug_row(
+        history_db,
+        'series-slug-stack-match-two.mkv',
+        provider='Target Provider',
+        quality=Quality.HDTV,
+        size=8 * 1024 * 1024,
+        client_status=3,
+        date=2
+    )
+    matching_rows = {first_matching_row, later_matching_row}
+    _insert_series_slug_row(
+        history_db,
+        'series-slug-stack-action-miss.mkv',
+        action=SNATCHED,
+        provider='Target Provider',
+        quality=Quality.HDTV,
+        size=8 * 1024 * 1024,
+        client_status=3
+    )
+    _insert_series_slug_row(
+        history_db,
+        'series-slug-stack-provider-miss.mkv',
+        provider='Other Provider',
+        quality=Quality.HDTV,
+        size=8 * 1024 * 1024,
+        client_status=3
+    )
+    _insert_series_slug_row(
+        history_db,
+        'series-slug-stack-quality-miss.mkv',
+        provider='Target Provider',
+        quality=Quality.FULLHDTV,
+        size=8 * 1024 * 1024,
+        client_status=3
+    )
+    _insert_series_slug_row(
+        history_db,
+        'series-slug-stack-size-miss.mkv',
+        provider='Target Provider',
+        quality=Quality.HDTV,
+        size=2 * 1024 * 1024,
+        client_status=3
+    )
+    _insert_series_slug_row(
+        history_db,
+        'series-slug-stack-client-miss.mkv',
+        provider='Target Provider',
+        quality=Quality.HDTV,
+        size=8 * 1024 * 1024,
+        client_status=7
+    )
+    _insert_series_slug_row(
+        history_db,
+        'series-slug-stack-identity-miss.mkv',
+        showid=PRIMARY_SHOWID + 1,
+        provider='Target Provider',
+        quality=Quality.HDTV,
+        size=8 * 1024 * 1024,
+        client_status=3
+    )
+    column_filters = {
+        'statusName': DOWNLOADED,
+        'providerId': 'target provider',
+        'quality': Quality.HDTV,
+        'size': '> 4',
+        'clientStatus': 3,
+    }
+
+    detailed_response, detailed_rows = await _fetch_series_slug_rows(
+        fetch_history,
+        PRIMARY_SERIES_SLUG,
+        column_filters=column_filters,
+        page=1,
+        limit=1,
+        sort=[{'field': 'actionDate', 'type': 'desc'}]
+    )
+    compact_response, compact_rows = await _fetch_series_slug_rows(
+        fetch_history, PRIMARY_SERIES_SLUG, column_filters=column_filters, compact=True
+    )
+
+    assert detailed_response.headers['X-Pagination-Count'] == '2'
+    assert len(detailed_rows) == 1
+    assert detailed_rows[0]['id'] == later_matching_row
+    assert compact_response.headers['X-Pagination-Count'] == '1'
+    assert len(compact_rows) == 1
+    assert {row['id'] for row in compact_rows[0]['rows']} == matching_rows
 
 
 @pytest.mark.gen_test
