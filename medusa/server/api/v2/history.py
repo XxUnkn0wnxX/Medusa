@@ -207,34 +207,50 @@ class HistoryHandler(BaseRequestHandler):
                     WHERE LOWER(title) LIKE LOWER(?)
             """
             cte_params.extend([like_resource_title, like_resource_title])
-            if resource_identifier:
-                cte_query += """
-                    UNION
-                    SELECT ? AS indexer, ? AS indexer_id
-                """
-                cte_params.extend([resource_identifier.indexer.id, resource_identifier.id])
             cte_query += """
                 )
             """
             if resource_season is not None and resource_episode is not None:
+                direct_identity = ''
+                direct_identity_params = []
+                if resource_identifier:
+                    direct_identity = (
+                        ' OR (history.indexer_id = ? AND history.showid = ?'
+                        ' AND history.season = ? AND history.episode = ?)'
+                    )
+                    direct_identity_params = [
+                        resource_identifier.indexer.id,
+                        resource_identifier.id,
+                        resource_season,
+                        resource_episode
+                    ]
                 where_with_ops += [
-                    '(LOWER(resource) LIKE LOWER(?) OR EXISTS ('
+                    '(LOWER(resource) LIKE LOWER(?)'
+                    + direct_identity
+                    + ' OR EXISTS ('
                     ' SELECT 1 FROM show_match_identities sm'
                     ' WHERE sm.indexer = history.indexer_id'
                     ' AND sm.indexer_id = history.showid'
                     ' AND history.season = ? AND history.episode = ?'
                     '))'
                 ]
-                params += [like_resource, resource_season, resource_episode]
+                params += [like_resource] + direct_identity_params + [resource_season, resource_episode]
             else:
+                direct_identity = ''
+                direct_identity_params = []
+                if resource_identifier:
+                    direct_identity = ' OR (history.indexer_id = ? AND history.showid = ?)'
+                    direct_identity_params = [resource_identifier.indexer.id, resource_identifier.id]
                 where_with_ops += [
-                    '(LOWER(resource) LIKE LOWER(?) OR EXISTS ('
+                    '(LOWER(resource) LIKE LOWER(?)'
+                    + direct_identity
+                    + ' OR EXISTS ('
                     ' SELECT 1 FROM show_match_identities sm'
                     ' WHERE sm.indexer = history.indexer_id'
                     ' AND sm.indexer_id = history.showid'
                     '))'
                 ]
-                params.append(like_resource)
+                params += [like_resource] + direct_identity_params
 
         if where:
             sql_base += ' WHERE ' + ' AND '.join(f'{item} = ?' for item in where)

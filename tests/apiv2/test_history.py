@@ -400,6 +400,67 @@ async def test_series_slug_rendered_episode_filter_targets_detailed_and_compact(
 
 
 @pytest.mark.gen_test
+@pytest.mark.parametrize(
+    'resource_filter,resource_title_filter,season,episode',
+    [
+        (PRIMARY_SERIES_SLUG, PRIMARY_SERIES_SLUG, None, None),
+        (
+            '{0} - s02e07'.format(PRIMARY_SERIES_SLUG),
+            PRIMARY_SERIES_SLUG,
+            2,
+            7
+        ),
+    ],
+    ids=['plain', 'rendered']
+)
+async def test_series_slug_query_shape_avoids_constant_identity_union(
+    history_db, fetch_history, monkeypatch, resource_filter, resource_title_filter, season, episode
+):
+    matching_row = _insert_series_slug_row(
+        history_db,
+        'query-shape-target.mkv',
+        season=season or 1,
+        episode=episode or 1
+    )
+    captured = []
+    original_select = history_module.db.DBConnection.select
+
+    def capture_select(connection, query, args=None):
+        captured.append((query, tuple(args or ())))
+        return original_select(connection, query, args)
+
+    monkeypatch.setattr(history_module.db.DBConnection, 'select', capture_select)
+
+    response, rows = await _fetch_series_slug_rows(fetch_history, resource_filter)
+
+    assert response.code == 200
+    assert {row['id'] for row in rows} == {matching_row}
+    assert len(captured) == 1
+
+    query, args = captured[0]
+    normalized_query = ' '.join(query.split())
+    history_where = normalized_query.split('FROM history', 1)[1]
+    # Keeping the constant identity out of the correlated UNION CTE lets SQLite 3.51 build its automatic lookup index.
+    assert 'SELECT ? AS indexer, ? AS indexer_id' not in normalized_query
+    direct_identity = 'history.indexer_id = ? AND history.showid = ?'
+    assert direct_identity in history_where
+    if season is not None and episode is not None:
+        assert '{0} AND history.season = ? AND history.episode = ?'.format(direct_identity) in history_where
+        assert history_where.count('AND history.season = ? AND history.episode = ?') == 2
+
+    expected_args = [
+        '%%{0}%%'.format(resource_title_filter),
+        '%%{0}%%'.format(resource_title_filter),
+        '%%{0}%%'.format(resource_filter),
+        PRIMARY_INDEXER_ID,
+        PRIMARY_SHOWID,
+    ]
+    if season is not None and episode is not None:
+        expected_args.extend([season, episode, season, episode])
+    assert args == tuple(expected_args)
+
+
+@pytest.mark.gen_test
 async def test_series_slug_filters_stack_with_pagination_and_compact_grouping(
     history_db, fetch_history
 ):
