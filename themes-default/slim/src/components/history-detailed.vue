@@ -13,7 +13,7 @@
             :sort-options="{
                 enabled: true,
                 multipleColumns: false,
-                initialSortBy: getSortFromCookie()
+                initialSortBy: historyHeaderSort
             }"
             :pagination-options="{
                 enabled: true,
@@ -183,6 +183,7 @@ export default {
             dateInputFormat: 'yyyyMMddHHmmss', // E.g. 07-09-2017 19:16:25
             dateOutputFormat: 'yyyy-MM-dd HH:mm:ss',
             type: 'date',
+            firstSortType: 'desc',
             hidden: getCookie('Date')
         }, {
             label: 'Episode',
@@ -240,6 +241,8 @@ export default {
             selectedClientStatusValue: [],
             perPageDropdown,
             historyTableMounted: false,
+            historyHeaderSort: [],
+            restoringSortHeader: false,
             providerFilterValue: '',
             malformedTextFilters: {
                 providerId: false
@@ -258,6 +261,7 @@ export default {
             layout: 'detailed',
             sort: this.getSortFromCookie()
         });
+        this.historyHeaderSort = this.remoteHistory.sort;
         this.initializeHistoryPagination({
             layout: 'detailed',
             perPage: this.getCookie('pagination-perpage-history')
@@ -348,8 +352,27 @@ export default {
             this.loadItemsDebounced();
         },
         onSortChange(params) {
-            this.setCookie('sort', params);
-            this.remoteHistory.sort = params.filter(item => item.type !== 'none');
+            if (this.restoringSortHeader) {
+                return;
+            }
+            const sort = Array.isArray(params) ? params.filter(item => item.type !== 'none') : [];
+            const canonicalSort = sort.length > 0 ? sort : [{ field: 'actionDate', type: 'desc' }];
+            this.setCookie('sort', canonicalSort);
+            this.remoteHistory.sort = canonicalSort;
+            if (sort.length === 0) {
+                this.historyHeaderSort = canonicalSort;
+                this.restoringSortHeader = true;
+                this.$nextTick(() => {
+                    try {
+                        const table = this.$refs['detailed-history'];
+                        if (table && typeof table.initializeSort === 'function') {
+                            table.initializeSort();
+                        }
+                    } finally {
+                        this.restoringSortHeader = false;
+                    }
+                });
+            }
             this.loadItemsDebounced();
         },
         canonicalizeMalformedTextFilters(exceptField) {

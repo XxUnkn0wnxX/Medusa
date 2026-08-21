@@ -11,6 +11,32 @@ Vue.use(Vuex);
 
 const VueGoodTableStub = {
     props: ['columns', 'rows', 'totalRows', 'searchOptions', 'sortOptions', 'paginationOptions', 'columnFilterOptions', 'rowStyleClass', 'styleClass'],
+    data() {
+        return {
+            headerSort: []
+        };
+    },
+    watch: {
+        sortOptions: {
+            deep: true,
+            handler(nextOptions, previousOptions) {
+                const nextSort = JSON.stringify(nextOptions && nextOptions.initialSortBy);
+                const previousSort = JSON.stringify(previousOptions && previousOptions.initialSortBy);
+                if (nextSort !== previousSort) {
+                    this.initializeSort();
+                }
+            }
+        }
+    },
+    methods: {
+        emitSort(sort) {
+            this.headerSort = sort.map(item => Object.assign({}, item));
+            this.$emit('on-sort-change', this.headerSort);
+        },
+        initializeSort() {
+            this.emitSort(this.sortOptions.initialSortBy.map(sort => Object.assign({}, sort)));
+        }
+    },
     render(h) {
         const slot = this.$scopedSlots['column-filter'];
         const fields = ['episodeTitle', 'providerId', 'size'];
@@ -1659,6 +1685,78 @@ describe('History filter state composition', () => {
         expect(store.state.history.remoteCompact.sort).toEqual([{ field: 'actionDate', type: 'desc' }]);
         expect(setCookie).toHaveBeenCalledWith('sort', [{ field: 'actionDate', type: 'desc' }]);
         expect(setCookie).toHaveBeenCalledWith('pagination-perpage-history', 100);
+        wrapper.destroy();
+    });
+
+    it.each([
+        ['Detailed', {
+            component: HistoryDetailed,
+            remoteKey: 'remote',
+            tableRef: 'detailed-history',
+            stubs: {
+                VueGoodTable: VueGoodTableStub,
+                AppLink: true,
+                QualityPill: true,
+                FontAwesomeIcon: true,
+                Multiselect: true
+            }
+        }],
+        ['Compact', {
+            component: HistoryCompact,
+            remoteKey: 'remoteCompact',
+            tableRef: 'compact-history',
+            stubs: {
+                VueGoodTable: VueGoodTableStub,
+                AppLink: true,
+                QualityPill: true
+            }
+        }]
+    ])('restores the %s descending sort after VGT clears it', async (_name, options) => {
+        const { component, remoteKey, tableRef, stubs } = options;
+        const expectedSort = [{ field: 'actionDate', type: 'desc' }];
+        const cookieStore = {
+            sort: [{ field: 'quality', type: 'asc' }]
+        };
+        const store = createHistoryStore({
+            layout: remoteKey === 'remote' ? 'detailed' : 'compact',
+            [remoteKey]: {
+                sort: [{ field: 'quality', type: 'asc' }]
+            }
+        });
+        const mounted = mountHistoryComponent(component, store, cookieStore, stubs);
+        const { wrapper, setCookie, loadItems } = mounted;
+        const table = wrapper.vm.$refs[tableRef];
+        const initializeSort = jest.spyOn(table, 'initializeSort');
+        const actionDateColumn = wrapper.vm.columns.find(column => column.field === 'actionDate');
+        const ascendingSort = [{ field: 'actionDate', type: 'asc' }];
+
+        expect(actionDateColumn.firstSortType).toBe('desc');
+
+        wrapper.vm.loadItemsDebounced.mockClear();
+        table.emitSort([{ field: 'actionDate', type: 'none' }]);
+        await wrapper.vm.$nextTick();
+
+        expect(cookieStore.sort).toEqual(expectedSort);
+        expect(setCookie).toHaveBeenCalledWith('sort', expectedSort);
+        expect(store.state.history[remoteKey].sort).toEqual(expectedSort);
+        expect(wrapper.vm.serverParams.sort).toEqual(expectedSort);
+        expect(table.$props.sortOptions.initialSortBy).toEqual(expectedSort);
+        expect(table.headerSort).toEqual(expectedSort);
+        expect(initializeSort).toHaveBeenCalled();
+        expect(wrapper.vm.loadItemsDebounced).toHaveBeenCalledTimes(1);
+        expect(loadItems).toHaveBeenCalledTimes(1);
+
+        initializeSort.mockClear();
+        wrapper.vm.loadItemsDebounced.mockClear();
+        table.emitSort(ascendingSort);
+        await wrapper.vm.$nextTick();
+
+        expect(cookieStore.sort).toEqual(ascendingSort);
+        expect(setCookie).toHaveBeenLastCalledWith('sort', ascendingSort);
+        expect(store.state.history[remoteKey].sort).toEqual(ascendingSort);
+        expect(wrapper.vm.serverParams.sort).toEqual(ascendingSort);
+        expect(initializeSort).not.toHaveBeenCalled();
+        expect(wrapper.vm.loadItemsDebounced).toHaveBeenCalledTimes(1);
         wrapper.destroy();
     });
 
