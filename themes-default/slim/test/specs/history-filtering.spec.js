@@ -7,11 +7,12 @@ const VueGoodTableStub = {
     props: ['columns', 'rows', 'totalRows', 'searchOptions', 'sortOptions', 'paginationOptions', 'columnFilterOptions', 'rowStyleClass', 'styleClass'],
     render(h) {
         const slot = this.$scopedSlots['column-filter'];
-        return h('div', [slot ? slot({
+        const fields = ['episodeTitle', 'providerId', 'size'];
+        return h('div', fields.map(field => slot ? slot({
             column: {
-                field: 'episodeTitle'
+                field
             }
-        }) : null]);
+        }) : null));
     }
 };
 
@@ -465,7 +466,40 @@ describe('History filter state composition', () => {
         wrapper.destroy();
     });
 
-    it('detailed size filter trims outer whitespace and preserves the filter stack', () => {
+    it('detailed episode and provider filters preserve quoted backend values', () => {
+        const { wrapper } = mountDetailed();
+
+        wrapper.vm.updateResource({
+            currentTarget: {
+                value: "'  quoted episode  '"
+            }
+        });
+        expect(wrapper.vm.remoteHistory.filter.columnFilters.resource).toBe("'  quoted episode  '");
+
+        wrapper.vm.updateResource({
+            currentTarget: {
+                value: 'plain episode'
+            }
+        });
+        expect(wrapper.vm.remoteHistory.filter.columnFilters.resource).toBe('plain episode');
+
+        wrapper.vm.updateProvider({
+            currentTarget: {
+                value: '  "  quoted provider  "  '
+            }
+        });
+        expect(wrapper.vm.remoteHistory.filter.columnFilters.providerId).toBe('"  quoted provider  "');
+
+        wrapper.vm.updateProvider({
+            currentTarget: {
+                value: 'plain provider'
+            }
+        });
+        expect(wrapper.vm.remoteHistory.filter.columnFilters.providerId).toBe('plain provider');
+        wrapper.destroy();
+    });
+
+    it('detailed size filter canonicalizes valid values, including quoted values', () => {
         const initialFilters = {
             resource: 'old resource',
             providerId: 'old provider',
@@ -484,6 +518,14 @@ describe('History filter state composition', () => {
         });
         const cases = [
             {
+                value: '<1024',
+                expected: '< 1024'
+            },
+            {
+                value: '< 1024',
+                expected: '< 1024'
+            },
+            {
                 value: '  > 1024',
                 expected: '> 1024'
             },
@@ -494,6 +536,18 @@ describe('History filter state composition', () => {
             {
                 value: '  > 1024  ',
                 expected: '> 1024'
+            },
+            {
+                value: "  '<1024'  ",
+                expected: '< 1024'
+            },
+            {
+                value: '  "> 8"  ',
+                expected: '> 8'
+            },
+            {
+                value: '`< 1`',
+                expected: '< 1'
             },
             {
                 value: '   ',
@@ -513,6 +567,76 @@ describe('History filter state composition', () => {
                 size: expected
             });
             expect(wrapper.vm.remoteHistory.page).toBe(1);
+            expect(wrapper.vm.loadItemsDebounced).toHaveBeenCalledTimes(1);
+        });
+        expect(wrapper.vm.remoteHistory.filter.columnFilters.size).toBe('');
+        wrapper.destroy();
+    });
+
+    it('detailed size filter rejects invalid values without changing state or loading', () => {
+        const initialFilters = {
+            resource: 'old resource',
+            providerId: 'old provider',
+            quality: '720p',
+            size: '> 8',
+            clientStatus: 1,
+            statusName: 'Downloaded'
+        };
+        const { wrapper, setCookie } = mountDetailed({
+            remote: {
+                page: 9,
+                filter: {
+                    columnFilters: initialFilters
+                }
+            }
+        });
+        const filterBefore = JSON.parse(JSON.stringify(wrapper.vm.remoteHistory.filter));
+        const invalidValues = [
+            '= 1024',
+            '<= 1024',
+            '>= 1024',
+            '< 1024 MB',
+            '< 1024 OR 1=1',
+            '< 1234567',
+            "'< 1024\""
+        ];
+
+        invalidValues.forEach(value => {
+            wrapper.vm.loadItemsDebounced.mockClear();
+            setCookie.mockClear();
+            wrapper.vm.updateSizeFilter({
+                currentTarget: {
+                    value
+                }
+            });
+            expect(wrapper.vm.remoteHistory.filter).toEqual(filterBefore);
+            expect(wrapper.vm.remoteHistory.page).toBe(9);
+            expect(wrapper.vm.loadItemsDebounced).toHaveBeenCalledTimes(0);
+            expect(setCookie).toHaveBeenCalledTimes(0);
+        });
+        wrapper.destroy();
+    });
+
+    it('detailed size filter clears matching quote-only values for each wrapper', () => {
+        const { wrapper } = mountDetailed({
+            remote: {
+                filter: {
+                    columnFilters: {
+                        size: '> 8'
+                    }
+                }
+            }
+        });
+        const quoteOnlyValues = ["''", '""', '``', "  ''  "];
+
+        quoteOnlyValues.forEach(value => {
+            wrapper.vm.loadItemsDebounced.mockClear();
+            wrapper.vm.updateSizeFilter({
+                currentTarget: {
+                    value
+                }
+            });
+            expect(wrapper.vm.remoteHistory.filter.columnFilters.size).toBe('');
             expect(wrapper.vm.loadItemsDebounced).toHaveBeenCalledTimes(1);
         });
         wrapper.destroy();
@@ -889,5 +1013,13 @@ describe('History filter state composition', () => {
         expect(compact.find('input[placeholder="Show title or release"]').exists()).toBe(true);
         detailed.destroy();
         compact.destroy();
+    });
+
+    it('detailed Size filter placeholder uses an unquoted example', () => {
+        const { wrapper } = mountDetailed();
+
+        expect(wrapper.find('input[placeholder="e.g. < 1024 MB"]').exists()).toBe(true);
+        expect(wrapper.find('input[placeholder*="`"]').exists()).toBe(false);
+        wrapper.destroy();
     });
 });

@@ -18,6 +18,9 @@ sickbeard.db*
 main.db.*
 failed.db*
 *.db
+*.db-journal
+*.db-shm
+*.db-wal
 autoProcessTV.cfg
 server.crt
 server.key

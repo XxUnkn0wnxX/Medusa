@@ -22,6 +22,41 @@ log = BraceAdapter(logging.getLogger(__name__))
 log.logger.addHandler(logging.NullHandler())
 
 
+def _normalize_text_filter(value):
+    """Normalize an episode or provider text filter."""
+    if not isinstance(value, str):
+        return None
+
+    value = value.strip()
+    if not value:
+        return None
+
+    if len(value) >= 2 and value[0] in "'\"`" and value[-1] == value[0]:
+        value = value[1:-1]
+        return value if value else None
+
+    return value
+
+
+def _parse_size_filter(value):
+    """Return a validated size operator and byte value, or None."""
+    if not isinstance(value, str):
+        return None
+
+    value = value.strip()
+    if not value:
+        return None
+
+    if len(value) >= 2 and value[0] in "'\"`" and value[-1] == value[0]:
+        value = value[1:-1].strip()
+
+    match = re.fullmatch(r'(?P<operator>[<>])\s*(?P<size>[0-9]{1,6})', value)
+    if not match:
+        return None
+
+    return match.group('operator'), int(match.group('size')) * 1024 * 1024
+
+
 class HistoryHandler(BaseRequestHandler):
     """History request handler."""
 
@@ -101,24 +136,15 @@ class HistoryHandler(BaseRequestHandler):
         }
 
         # Prepare an operator (> or <) and size, for the size query.
-        size_operator = None
-        size = None
+        size_filter = None
         provider = None
         resource = None
 
         if filter is not None and filter.get('columnFilters'):
             size = filter['columnFilters'].pop('size', None)
-            provider = filter['columnFilters'].pop('providerId', None)
-            resource = filter['columnFilters'].pop('resource', None)
-            if isinstance(size, str):
-                size = size.strip() or None
-            if isinstance(provider, str):
-                provider = provider.strip() or None
-            if isinstance(resource, str):
-                resource = resource.strip() or None
-
-            if size:
-                size_operator, size = size.split(' ')
+            provider = _normalize_text_filter(filter['columnFilters'].pop('providerId', None))
+            resource = _normalize_text_filter(filter['columnFilters'].pop('resource', None))
+            size_filter = _parse_size_filter(size)
 
             for filter_field, filter_value in filter['columnFilters'].items():
                 # Loop through each column filter apply the mapping, and add to sql_base.
@@ -129,13 +155,10 @@ class HistoryHandler(BaseRequestHandler):
                 params += [filter_value]
 
         # Add size query (with operator)
-        if size_operator and size:
-            try:
-                size = int(size) * 1024 * 1024
-                where_with_ops += [f' size {size_operator} ? ']
-                params.append(size)
-            except ValueError:
-                log.info('Could not parse {size} into a valid number', {'size': size})
+        if size_filter:
+            size_operator, size = size_filter
+            where_with_ops += [f' size {size_operator} ? ']
+            params.append(size)
 
         # Add provider with like %provider%
         if provider:

@@ -112,7 +112,7 @@
                 </span>
 
                 <span v-else-if="column.field === 'size'">
-                    <input placeholder="ex. `< 1024` (MB)" class="'form-control input-sm vgt-input" @input="updateSizeFilter">
+                    <input placeholder="e.g. < 1024 MB" class="'form-control input-sm vgt-input" @input="updateSizeFilter">
                 </span>
 
                 <span v-else-if="column.field === 'clientStatus'">
@@ -370,17 +370,21 @@ export default {
          * @param {string} size - Operator with size in MB.
          */
         updateSizeFilter(size) {
-            // Check for valid syntax, and pass along.
             size = size.currentTarget.value.trim();
+
+            const quote = size[0];
+            if (['\'', '"', '`'].includes(quote) && size[size.length - 1] === quote) {
+                size = size.slice(1, -1).trim();
+            }
+
             if (!size) {
                 this.updateFilterValue('size', size);
                 return;
             }
 
-            const validSizeRegex = /[<>] \d{2,6}/;
-            if (size.match(validSizeRegex)) {
-                this.invalidSizeMessage = '';
-                this.updateFilterValue('size', size);
+            const validSizeMatch = size.match(/^([<>])\s*(\d{1,6})$/);
+            if (validSizeMatch) {
+                this.updateFilterValue('size', `${validSizeMatch[1]} ${validSizeMatch[2]}`);
             }
         },
         updateResource(resource) {

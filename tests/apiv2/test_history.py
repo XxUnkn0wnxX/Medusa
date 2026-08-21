@@ -242,6 +242,18 @@ async def test_whitespace_only_resource_filter_is_treated_as_empty(history_db, f
 
 
 @pytest.mark.gen_test
+@pytest.mark.parametrize('quote', ["'", '"', '`'])
+async def test_quoted_episode_filter_preserves_inner_whitespace(history_db, fetch_history, quote):
+    spaced_row = _insert_history_row(history_db, DOWNLOADED, '  Exact Resource  .mkv')
+    _insert_history_row(history_db, DOWNLOADED, 'Exact Resource.mkv')
+
+    resource_filter = '{0}  Exact Resource  {0}'.format(quote)
+    rows = json.loads((await fetch_history(resource_filter)).body)
+
+    assert {row['id'] for row in rows} == {spaced_row}
+
+
+@pytest.mark.gen_test
 @pytest.mark.parametrize(
     'resource_filter',
     [
@@ -386,6 +398,35 @@ async def test_episode_filter_with_provider_is_case_insensitive_partial_and_trim
 
 
 @pytest.mark.gen_test
+@pytest.mark.parametrize('quote', ["'", '"', '`'])
+async def test_quoted_provider_filter_preserves_inner_whitespace(history_db, fetch_history, quote):
+    spaced_row = _insert_history_row(
+        history_db,
+        DOWNLOADED,
+        'provider-spaced.mkv',
+        provider='  Exact Provider  '
+    )
+    _insert_history_row(
+        history_db,
+        DOWNLOADED,
+        'provider-unspaced.mkv',
+        provider='Exact Provider'
+    )
+
+    provider_filter = '{0}  Exact Provider  {0}'.format(quote)
+    rows = json.loads((await fetch_history(
+        'My English Title', column_filters={'providerId': provider_filter}
+    )).body)
+
+    assert {row['id'] for row in rows} == {spaced_row}
+
+
+@pytest.mark.parametrize('filter_value', ['"Episode\'', "'Episode\"", '`Episode"'])
+def test_mismatched_text_filter_quotes_remain_literal(filter_value):
+    assert history_module._normalize_text_filter(filter_value) == filter_value
+
+
+@pytest.mark.gen_test
 async def test_episode_filter_with_whitespace_only_provider_preserves_other_filters(history_db, fetch_history):
     matching_row = _insert_history_row(
         history_db,
@@ -427,6 +468,154 @@ async def test_episode_filter_with_size_trims_outer_whitespace(history_db, fetch
         'My English Title', column_filters={'size': size_filter}
     )).body)
 
+    assert {row['id'] for row in rows} == {matching_row}
+
+
+@pytest.mark.gen_test
+@pytest.mark.parametrize(
+    'size_filter,expected_size',
+    [
+        ('<1024', 512),
+        ('< 1024', 512),
+        ("'<1024'", 512),
+        ('" < 1024 "', 512),
+        ('`  <1024  `', 512),
+        ('>1024', 2048),
+        ('> 1024', 2048),
+        ("'>1024'", 2048),
+        ('" > 1024 "', 2048),
+        ('`  >1024  `', 2048),
+    ]
+)
+async def test_size_filter_accepts_optional_quotes_and_operator_spacing(
+    history_db, fetch_history, size_filter, expected_size
+):
+    matching_row = _insert_history_row(
+        history_db,
+        SNATCHED,
+        'size-operator-match.mkv',
+        size=expected_size * 1024 * 1024
+    )
+    exact_row = _insert_history_row(
+        history_db,
+        SNATCHED,
+        'size-operator-exact.mkv',
+        size=1024 * 1024 * 1024
+    )
+    other_size = 2048 if expected_size == 512 else 512
+    other_row = _insert_history_row(
+        history_db,
+        SNATCHED,
+        'size-operator-other.mkv',
+        size=other_size * 1024 * 1024
+    )
+
+    rows = json.loads((await fetch_history(
+        'My English Title', column_filters={'size': size_filter}
+    )).body)
+
+    assert {row['id'] for row in rows} == {matching_row}
+    assert exact_row not in {row['id'] for row in rows}
+    assert other_row not in {row['id'] for row in rows}
+
+
+@pytest.mark.gen_test
+@pytest.mark.parametrize(
+    'size_filter',
+    [
+        '1024',
+        '= 1024',
+        '<= 1024',
+        '>= 1024',
+        '>> 1024',
+        '< 1024 MB',
+        '< 1024junk',
+        '; DROP TABLE history',
+        '"<1024',
+        '<1024"',
+        '"<1024`',
+        '`<1024"',
+    ]
+)
+async def test_malformed_size_filter_is_ignored_without_affecting_other_filters(
+    history_db, fetch_history, size_filter
+):
+    matching_row = _insert_history_row(
+        history_db,
+        SNATCHED,
+        'size-malformed-provider-match.mkv',
+        provider='Target Provider'
+    )
+    _insert_history_row(
+        history_db,
+        SNATCHED,
+        'size-malformed-provider-miss.mkv',
+        provider='Other Provider'
+    )
+
+    response = await fetch_history(
+        'My English Title',
+        column_filters={'size': size_filter, 'providerId': 'target provider'}
+    )
+    rows = json.loads(response.body)
+
+    assert response.code == 200
+    assert {row['id'] for row in rows} == {matching_row}
+
+
+@pytest.mark.gen_test
+@pytest.mark.parametrize(
+    'size_filter,expected_names',
+    [
+        ('>1', {'small', 'large'}),
+        ('>123456', set()),
+        ('>1234567', {'zero', 'small', 'large'}),
+        ('>１２３', {'zero', 'small', 'large'}),
+    ]
+)
+async def test_size_filter_enforces_ascii_digit_length(size_filter, expected_names, history_db, fetch_history):
+    rows_by_name = {
+        'zero': _insert_history_row(history_db, SNATCHED, 'size-boundary-zero.mkv', size=0),
+        'small': _insert_history_row(
+            history_db, SNATCHED, 'size-boundary-small.mkv', size=512 * 1024 * 1024
+        ),
+        'large': _insert_history_row(
+            history_db, SNATCHED, 'size-boundary-large.mkv', size=2048 * 1024 * 1024
+        ),
+    }
+
+    response = await fetch_history('My English Title', column_filters={'size': size_filter})
+    rows = json.loads(response.body)
+
+    assert response.code == 200
+    assert {name for name, row_id in rows_by_name.items() if row_id in {row['id'] for row in rows}} == expected_names
+
+
+@pytest.mark.gen_test
+@pytest.mark.parametrize('size_filter', [None, 1024, True, [], {}])
+async def test_non_string_size_filter_is_ignored_without_affecting_provider_filter(
+    history_db, fetch_history, size_filter
+):
+    matching_row = _insert_history_row(
+        history_db,
+        SNATCHED,
+        'size-non-string-provider-match.mkv',
+        provider='Target Provider'
+    )
+    _insert_history_row(
+        history_db,
+        SNATCHED,
+        'size-non-string-provider-miss.mkv',
+        provider='Other Provider'
+    )
+
+    response = await fetch_history(
+        'My English Title',
+        column_filters={'size': size_filter, 'providerId': 'target provider'}
+    )
+    rows = json.loads(response.body)
+
+    assert response.code == 200
     assert {row['id'] for row in rows} == {matching_row}
 
 
