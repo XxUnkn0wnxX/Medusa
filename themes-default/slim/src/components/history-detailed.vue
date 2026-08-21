@@ -401,16 +401,13 @@ export default {
                 return result;
             }, {});
 
-            this.applyFilter(Object.assign({}, manualFilters, nextFilter), true);
+            this.applyFilter(Object.assign({}, manualFilters, nextFilter));
         },
-        applyFilter(columnFilters, persistFilterCookie) {
+        applyFilter(columnFilters) {
             const nextFilter = Object.assign({}, this.remoteHistory.filter, {
                 columnFilters
             });
             this.remoteHistory.filter = nextFilter;
-            if (persistFilterCookie) {
-                this.setCookie('filter', nextFilter);
-            }
             this.remoteHistory.page = 1;
             this.loadItemsDebounced();
         },
@@ -422,7 +419,7 @@ export default {
             const columnFilters = Object.assign({}, currentFilters, {
                 [field]: value
             });
-            this.applyFilter(columnFilters, false);
+            this.applyFilter(columnFilters);
         },
         updateClientStatusFilter(event) {
             const combinedStatus = event.reduce((result, item) => {

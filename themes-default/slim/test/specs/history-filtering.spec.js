@@ -451,7 +451,7 @@ describe('History filter state composition', () => {
         mounted.wrapper.destroy();
     });
 
-    it('detailed onColumnFilter merges native action changes while preserving manual filters', () => {
+    it('detailed onColumnFilter merges native and manual filters without persisting a filter cookie', () => {
         const { wrapper, setCookie } = mountDetailed({
             remote: {
                 page: 4,
@@ -489,7 +489,7 @@ describe('History filter state composition', () => {
             }
         });
         expect(wrapper.vm.loadItemsDebounced).toHaveBeenCalledTimes(1);
-        expect(setCookie).toHaveBeenCalledWith('filter', wrapper.vm.remoteHistory.filter);
+        expect(setCookie).toHaveBeenCalledTimes(0);
         wrapper.destroy();
     });
 
@@ -919,7 +919,7 @@ describe('History filter state composition', () => {
             });
             expect(wrapper.vm.remoteHistory.page).toBe(1);
             expect(wrapper.vm.loadItemsDebounced).toHaveBeenCalledTimes(1);
-            expect(setCookie).toHaveBeenCalledWith('filter', wrapper.vm.remoteHistory.filter);
+            expect(setCookie).toHaveBeenCalledTimes(0);
             wrapper.destroy();
         });
     });
