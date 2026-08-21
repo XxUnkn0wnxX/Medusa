@@ -92,7 +92,7 @@
 
             <template #column-filter="{ column }">
                 <span v-if="column.field === 'episodeTitle'">
-                    <input placeholder="Show title or release" class="'form-control input-sm vgt-input" @input="updateResource">
+                    <input :value="resourceFilterValue" placeholder="Show title or release" class="'form-control input-sm vgt-input" @input="updateResource">
                 </span>
             </template>
         </vue-good-table>
@@ -104,6 +104,7 @@ import debounce from 'lodash/debounce';
 import { mapActions, mapGetters, mapState } from 'vuex';
 import { VueGoodTable } from 'vue-good-table';
 import { humanFileSize } from '../utils/core';
+import { normalizeHistoryTextFilter } from '../utils/history';
 import { manageCookieMixin } from '../mixins/manage-cookie';
 import QualityPill from './helpers/quality-pill.vue';
 import AppLink from './helpers/app-link.vue';
@@ -167,7 +168,8 @@ export default {
         return {
             columns,
             selectedClientStatusValue: [],
-            perPageDropdown
+            perPageDropdown,
+            resourceFilterValue: ''
         };
     },
     mounted() {
@@ -181,6 +183,8 @@ export default {
         this.remoteHistory.sort = getSortFromCookie();
     },
     created() {
+        const currentFilters = this.remoteHistory.filter && this.remoteHistory.filter.columnFilters ? this.remoteHistory.filter.columnFilters : {};
+        this.resourceFilterValue = currentFilters.resource || '';
         this.loadItemsDebounced = debounce(this.loadItems, 500);
     },
     computed: {
@@ -293,8 +297,10 @@ export default {
             this.updateFilterValue('quality', quality.currentTarget.value);
         },
         updateResource(resource) {
-            resource = resource.currentTarget.value;
-            this.updateFilterValue('resource', resource);
+            const { value } = resource.currentTarget;
+            const normalized = normalizeHistoryTextFilter(value);
+            this.resourceFilterValue = normalized.clearInput ? '' : value;
+            this.updateFilterValue('resource', normalized.filterValue);
         },
         // Load items is what brings back the rows from server
         loadItems() {

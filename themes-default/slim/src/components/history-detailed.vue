@@ -97,11 +97,11 @@
 
             <template #column-filter="{ column }">
                 <span v-if="column.field === 'episodeTitle'">
-                    <input placeholder="Show title or release" class="'form-control input-sm vgt-input" @input="updateResource">
+                    <input :value="resourceFilterValue" placeholder="Show title or release" class="'form-control input-sm vgt-input" @input="updateResource">
                 </span>
 
                 <span v-else-if="column.field === 'providerId'">
-                    <input placeholder="Provider | Group" class="'form-control input-sm vgt-input" @input="updateProvider">
+                    <input :value="providerFilterValue" placeholder="Provider | Group" class="'form-control input-sm vgt-input" @input="updateProvider">
                 </span>
 
                 <span v-else-if="column.field === 'quality'">
@@ -136,6 +136,7 @@ import debounce from 'lodash/debounce';
 import { mapActions, mapGetters, mapState } from 'vuex';
 import { VueGoodTable } from 'vue-good-table';
 import { humanFileSize } from '../utils/core';
+import { normalizeHistoryTextFilter } from '../utils/history';
 import { manageCookieMixin } from '../mixins/manage-cookie';
 import AppLink from './helpers/app-link.vue';
 import QualityPill from './helpers/quality-pill.vue';
@@ -237,7 +238,13 @@ export default {
         return {
             columns,
             selectedClientStatusValue: [],
-            perPageDropdown
+            perPageDropdown,
+            resourceFilterValue: '',
+            providerFilterValue: '',
+            malformedTextFilters: {
+                resource: false,
+                providerId: false
+            }
         };
     },
     mounted() {
@@ -252,6 +259,9 @@ export default {
         this.remoteHistory.sort = getSortFromCookie();
     },
     created() {
+        const currentFilters = this.remoteHistory.filter && this.remoteHistory.filter.columnFilters ? this.remoteHistory.filter.columnFilters : {};
+        this.resourceFilterValue = currentFilters.resource || '';
+        this.providerFilterValue = currentFilters.providerId || '';
         this.loadItemsDebounced = debounce(this.loadItems, 500);
     },
     computed: {
@@ -322,7 +332,18 @@ export default {
             this.remoteHistory.sort = params.filter(item => item.type !== 'none');
             this.loadItemsDebounced();
         },
+        canonicalizeMalformedTextFilters(exceptField) {
+            Object.keys(this.malformedTextFilters).forEach(field => {
+                if (field !== exceptField && this.malformedTextFilters[field]) {
+                    const inputKey = field === 'resource' ? 'resourceFilterValue' : 'providerFilterValue';
+                    const currentFilters = this.remoteHistory.filter && this.remoteHistory.filter.columnFilters ? this.remoteHistory.filter.columnFilters : {};
+                    this[inputKey] = currentFilters[field] || '';
+                    this.malformedTextFilters[field] = false;
+                }
+            });
+        },
         onColumnFilter(params) {
+            this.canonicalizeMalformedTextFilters();
             const nextFilter = params && Object.prototype.hasOwnProperty.call(params, 'columnFilters') ? params.columnFilters : params || {};
             const currentFilters = this.remoteHistory.filter && this.remoteHistory.filter.columnFilters ? this.remoteHistory.filter.columnFilters : {};
             const manualKeys = ['resource', 'providerId', 'quality', 'size', 'clientStatus'];
@@ -347,6 +368,9 @@ export default {
             this.loadItemsDebounced();
         },
         updateFilterValue(field, value) {
+            if (!['resource', 'providerId'].includes(field)) {
+                this.canonicalizeMalformedTextFilters();
+            }
             const currentFilters = this.remoteHistory.filter && this.remoteHistory.filter.columnFilters ? this.remoteHistory.filter.columnFilters : {};
             const columnFilters = Object.assign({}, currentFilters, {
                 [field]: value
@@ -388,12 +412,20 @@ export default {
             }
         },
         updateResource(resource) {
-            resource = resource.currentTarget.value;
-            this.updateFilterValue('resource', resource);
+            const { value } = resource.currentTarget;
+            const normalized = normalizeHistoryTextFilter(value);
+            this.resourceFilterValue = normalized.clearInput ? '' : value;
+            this.malformedTextFilters.resource = normalized.malformed;
+            this.canonicalizeMalformedTextFilters('resource');
+            this.updateFilterValue('resource', normalized.filterValue);
         },
         updateProvider(provider) {
-            provider = provider.currentTarget.value.trim();
-            this.updateFilterValue('providerId', provider);
+            const { value } = provider.currentTarget;
+            const normalized = normalizeHistoryTextFilter(value);
+            this.providerFilterValue = normalized.clearInput ? '' : value;
+            this.malformedTextFilters.providerId = normalized.malformed;
+            this.canonicalizeMalformedTextFilters('providerId');
+            this.updateFilterValue('providerId', normalized.filterValue);
         },
         // Load items is what brings back the rows from server
         loadItems() {

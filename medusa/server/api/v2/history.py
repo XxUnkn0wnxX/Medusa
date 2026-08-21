@@ -23,7 +23,7 @@ log.logger.addHandler(logging.NullHandler())
 
 
 def _normalize_text_filter(value):
-    """Normalize an episode or provider text filter."""
+    """Normalize Episode or Provider text while preserving quoted boundary whitespace."""
     if not isinstance(value, str):
         return None
 
@@ -31,9 +31,13 @@ def _normalize_text_filter(value):
     if not value:
         return None
 
-    if len(value) >= 2 and value[0] in "'\"`" and value[-1] == value[0]:
-        value = value[1:-1]
-        return value if value else None
+    wrappers = "'\"`"
+    if value[0] in wrappers or value[-1] in wrappers:
+        if len(value) >= 2 and value[0] == value[-1]:
+            value = value[1:-1]
+            return value if value else None
+        value = value.strip(wrappers).strip()
+        return value or None
 
     return value
 

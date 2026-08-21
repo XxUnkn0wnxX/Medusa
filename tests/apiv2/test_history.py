@@ -421,9 +421,190 @@ async def test_quoted_provider_filter_preserves_inner_whitespace(history_db, fet
     assert {row['id'] for row in rows} == {spaced_row}
 
 
-@pytest.mark.parametrize('filter_value', ['"Episode\'', "'Episode\"", '`Episode"'])
-def test_mismatched_text_filter_quotes_remain_literal(filter_value):
-    assert history_module._normalize_text_filter(filter_value) == filter_value
+@pytest.mark.parametrize(
+    'filter_value,expected',
+    [
+        ("'Episode'", 'Episode'),
+        ('"  Episode  "', '  Episode  '),
+        ('`  Episode  `', '  Episode  '),
+        ("'Episode", 'Episode'),
+        ('"Episode', 'Episode'),
+        ('`Episode', 'Episode'),
+        ("Episode'", 'Episode'),
+        ('Episode"', 'Episode'),
+        ('Episode`', 'Episode'),
+        ("'Episode\"", 'Episode'),
+        ('"Episode`', 'Episode'),
+        ("`Episode'", 'Episode'),
+        ("  'Episode  ", 'Episode'),
+        ('  Episode"  ', 'Episode'),
+        ('  "Episode\'  ', 'Episode'),
+        ("'", None),
+        ('"', None),
+        ('`', None),
+        ("''", None),
+        ('""', None),
+        ('``', None),
+        ("The Ogre's Bride", "The Ogre's Bride"),
+        ("O'Reilly", "O'Reilly"),
+        ("Test's", "Test's"),
+        ("Test ' s", "Test ' s"),
+        ('Test"s', 'Test"s'),
+        ('Test " s', 'Test " s'),
+        ('Test`s', 'Test`s'),
+        ('Test ` s', 'Test ` s'),
+        ("'Test's'", "Test's"),
+        ("'Test ' s'", "Test ' s"),
+        ('"Test\'s"', "Test's"),
+        ("'Test \" s'", 'Test " s'),
+        ("`Test ' s`", "Test ' s"),
+        ('"Test"s"', 'Test"s'),
+        ('"Test " s"', 'Test " s'),
+        ('`Test`s`', 'Test`s'),
+        ('`Test ` s`', 'Test ` s'),
+        ("'''", "'"),
+        ("''''", "''"),
+        ('"""', '"'),
+        ('```', '`'),
+        ('"Dog Days\'"', "Dog Days'"),
+        ("'Dog Days\"'", 'Dog Days"'),
+        ("'\"Kimi wo Aisuru'", '"Kimi wo Aisuru'),
+        ('"Don`t Problem Children"', 'Don`t Problem Children'),
+        ('The Ogre’s Bride', 'The Ogre’s Bride'),
+        ('“Quoted Title”', '“Quoted Title”'),
+        ('「日本語タイトル」', '「日本語タイトル」'),
+        ('『日本語タイトル』', '『日本語タイトル』'),
+        ('', None),
+        ('   ', None),
+        (None, None),
+        (123, None),
+        (['Episode'], None),
+    ]
+)
+def test_text_filter_normalization_preserves_or_cleans_content(filter_value, expected):
+    assert history_module._normalize_text_filter(filter_value) == expected
+
+
+@pytest.mark.gen_test
+@pytest.mark.parametrize(
+    'resource_filter,expected_resource',
+    [
+        ('"Target Episode', 'Target Episode'),
+        ('Target Episode"', 'Target Episode'),
+        ("'Target Episode\"", 'Target Episode'),
+    ]
+)
+async def test_malformed_episode_filter_uses_cleaned_content_and_stacks(
+    history_db, fetch_history, resource_filter, expected_resource
+):
+    matching_row = _insert_history_row(
+        history_db,
+        DOWNLOADED,
+        '{0} release.mkv'.format(expected_resource),
+        provider='Target Provider',
+        quality=Quality.HDTV
+    )
+    _insert_history_row(
+        history_db,
+        DOWNLOADED,
+        '{0} other.mkv'.format(expected_resource),
+        provider='Target Provider',
+        quality=Quality.FULLHDTV
+    )
+    _insert_history_row(
+        history_db,
+        DOWNLOADED,
+        'Different Episode release.mkv',
+        provider='Target Provider',
+        quality=Quality.HDTV
+    )
+
+    rows = json.loads((await fetch_history(
+        resource_filter, column_filters={'quality': Quality.HDTV}
+    )).body)
+
+    assert {row['id'] for row in rows} == {matching_row}
+
+
+@pytest.mark.gen_test
+@pytest.mark.parametrize(
+    'provider_filter,expected_provider',
+    [
+        ('"Target Provider', 'Target Provider'),
+        ('Target Provider"', 'Target Provider'),
+        ("'Target Provider\"", 'Target Provider'),
+    ]
+)
+async def test_malformed_provider_filter_uses_cleaned_content_and_stacks(
+    history_db, fetch_history, provider_filter, expected_provider
+):
+    matching_row = _insert_history_row(
+        history_db,
+        DOWNLOADED,
+        'Target Episode release.mkv',
+        provider=expected_provider,
+        quality=Quality.HDTV
+    )
+    _insert_history_row(
+        history_db,
+        DOWNLOADED,
+        'Target Episode other.mkv',
+        provider='Other Provider',
+        quality=Quality.HDTV
+    )
+    _insert_history_row(
+        history_db,
+        DOWNLOADED,
+        'Different Episode release.mkv',
+        provider=expected_provider,
+        quality=Quality.HDTV
+    )
+
+    rows = json.loads((await fetch_history(
+        'Target Episode',
+        column_filters={'providerId': provider_filter, 'quality': Quality.HDTV}
+    )).body)
+
+    assert {row['id'] for row in rows} == {matching_row}
+
+
+@pytest.mark.gen_test
+async def test_malformed_episode_and_provider_filters_clean_and_stack_together(history_db, fetch_history):
+    matching_row = _insert_history_row(
+        history_db,
+        DOWNLOADED,
+        'Target Episode release.mkv',
+        provider='Target Provider',
+        quality=Quality.HDTV
+    )
+    _insert_history_row(
+        history_db,
+        DOWNLOADED,
+        'Target Episode release.mkv',
+        provider='Other Provider',
+        quality=Quality.HDTV
+    )
+    _insert_history_row(
+        history_db,
+        DOWNLOADED,
+        'Different Episode release.mkv',
+        provider='Target Provider',
+        quality=Quality.HDTV
+    )
+    _insert_history_row(
+        history_db,
+        DOWNLOADED,
+        'Target Episode release.mkv',
+        provider='Target Provider',
+        quality=Quality.FULLHDTV
+    )
+
+    rows = json.loads((await fetch_history(
+        '\'"Target Episode',
+        column_filters={'providerId': 'Target Provider"\'', 'quality': Quality.HDTV}
+    )).body)
+
+    assert {row['id'] for row in rows} == {matching_row}
 
 
 @pytest.mark.gen_test

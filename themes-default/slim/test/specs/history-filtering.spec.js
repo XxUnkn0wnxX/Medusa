@@ -2,6 +2,7 @@ import Vuex from 'vuex';
 import { createLocalVue, shallowMount } from '@vue/test-utils';
 import HistoryDetailed from '../../src/components/history-detailed.vue';
 import HistoryCompact from '../../src/components/history-compact.vue';
+import { normalizeHistoryTextFilter } from '../../src/utils/history';
 
 const VueGoodTableStub = {
     props: ['columns', 'rows', 'totalRows', 'searchOptions', 'sortOptions', 'paginationOptions', 'columnFilterOptions', 'rowStyleClass', 'styleClass'],
@@ -170,6 +171,167 @@ const getPaginationOptions = wrapper => {
     });
     return table && table.$props && table.$props.paginationOptions;
 };
+
+const detailedFilterDefaults = () => ({
+    resource: 'old resource',
+    providerId: 'old provider',
+    quality: '720p',
+    size: '< 1024',
+    clientStatus: 1,
+    statusName: 'Downloaded'
+});
+
+const detailedTextInput = field => field === 'resource' ? 'Show title or release' : 'Provider | Group';
+
+const detailedTextMethod = field => field === 'resource' ? 'updateResource' : 'updateProvider';
+
+const assertDetailedTextUpdate = async ({ field, value, expected, visibleValue = value, initialFilters = detailedFilterDefaults() }) => {
+    const { wrapper } = mountDetailed({
+        remote: {
+            page: 9,
+            filter: {
+                columnFilters: initialFilters
+            }
+        }
+    });
+    wrapper.vm.loadItemsDebounced.mockClear();
+    wrapper.vm[detailedTextMethod(field)]({
+        currentTarget: {
+            value
+        }
+    });
+    await wrapper.vm.$nextTick();
+
+    expect(wrapper.find(`input[placeholder="${detailedTextInput(field)}"]`).element.value).toBe(visibleValue);
+    expect(wrapper.vm.remoteHistory.filter.columnFilters).toEqual({
+        ...initialFilters,
+        [field]: expected
+    });
+    expect(wrapper.vm.remoteHistory.page).toBe(1);
+    expect(wrapper.vm.loadItemsDebounced).toHaveBeenCalledTimes(1);
+    wrapper.destroy();
+};
+
+const assertDetailedOtherFilter = async ({ method, event, field, expected }) => {
+    const initialFilters = detailedFilterDefaults();
+    const { wrapper } = mountDetailed({
+        remote: {
+            page: 9,
+            filter: {
+                columnFilters: initialFilters
+            }
+        }
+    });
+    wrapper.vm.updateResource({
+        currentTarget: {
+            value: "'  cleaned resource"
+        }
+    });
+    wrapper.vm.loadItemsDebounced.mockClear();
+    wrapper.vm[method](event);
+    await wrapper.vm.$nextTick();
+
+    expect(wrapper.find('input[placeholder="Show title or release"]').element.value).toBe('cleaned resource');
+    expect(wrapper.vm.remoteHistory.filter.columnFilters).toEqual({
+        ...initialFilters,
+        resource: 'cleaned resource',
+        [field]: expected
+    });
+    expect(wrapper.vm.remoteHistory.page).toBe(1);
+    expect(wrapper.vm.loadItemsDebounced).toHaveBeenCalledTimes(1);
+    wrapper.destroy();
+};
+
+const assertCompactResourceUpdate = async ({ page, value, expected, existingFilters = { statusName: 'Downloaded' }, visibleValue = value }) => {
+    const initialFilters = {
+        resource: 'old compact',
+        ...existingFilters
+    };
+    const { wrapper } = mountCompact({
+        remoteCompact: {
+            page,
+            filter: {
+                columnFilters: initialFilters
+            }
+        }
+    });
+    wrapper.vm.loadItemsDebounced.mockClear();
+    wrapper.vm.updateResource({
+        currentTarget: {
+            value
+        }
+    });
+    await wrapper.vm.$nextTick();
+
+    expect(wrapper.find('input[placeholder="Show title or release"]').element.value).toBe(visibleValue);
+    expect(wrapper.vm.remoteHistory.filter.columnFilters).toEqual({
+        ...initialFilters,
+        resource: expected
+    });
+    expect(wrapper.vm.remoteHistory.page).toBe(1);
+    expect(wrapper.vm.loadItemsDebounced).toHaveBeenCalledTimes(1);
+    wrapper.destroy();
+};
+
+describe('normalizeHistoryTextFilter', () => {
+    it('covers text boundary, punctuation, and Unicode normalization cases', () => {
+        const cases = [
+            ['', '', false, false],
+            ['   ', '', false, false],
+            ['  unquoted title  ', 'unquoted title', false, false],
+            ["'  quoted title  '", "'  quoted title  '", false, false],
+            ['"  quoted title  "', '"  quoted title  "', false, false],
+            ['`  quoted title  `', '`  quoted title  `', false, false],
+            ["  ''  ", '', false, true],
+            ['""', '', false, true],
+            ['``', '', false, true],
+            ["'", '', true, false],
+            ["'leading", 'leading', true, false],
+            ['trailing"', 'trailing', true, false],
+            ["'mismatched\"", 'mismatched', true, false],
+            ["''leading", 'leading', true, false],
+            ['trailing""', 'trailing', true, false],
+            ["''  repeated  \"", 'repeated', true, false],
+            ["Test's", "Test's", false, false],
+            ["Test ' s", "Test ' s", false, false],
+            ['Test"s', 'Test"s', false, false],
+            ['Test " s', 'Test " s', false, false],
+            ['Test`s', 'Test`s', false, false],
+            ['Test ` s', 'Test ` s', false, false],
+            ['"Test\'s"', '"Test\'s"', false, false],
+            ["'Test \" s'", "'Test \" s'", false, false],
+            ["  `Test ' s`  ", "`Test ' s`", false, false],
+            ["'Dog Days\"'", "'Dog Days\"'", false, false],
+            ['"Dog Days\'"', '"Dog Days\'"', false, false],
+            ["'\"Leading double quote'", "'\"Leading double quote'", false, false],
+            ['  ’The “Ogre” Bride’  ', '’The “Ogre” Bride’', false, false],
+            ['  「日本語の題名」  ', '「日本語の題名」', false, false],
+            ['  『Provider』  ', '『Provider』', false, false]
+        ];
+
+        cases.forEach(([value, filterValue, malformed, clearInput]) => {
+            expect(normalizeHistoryTextFilter(value)).toEqual({
+                filterValue,
+                malformed,
+                clearInput
+            });
+        });
+    });
+
+    it('retains exactly one matching wrapper pair around repeated wrapper content', () => {
+        const cases = [["'''", "'"], ["''''", "''"], ['"""', '"'], ['""""', '""'], ['```', '`'], ['````', '``']];
+
+        cases.forEach(([value, inner]) => {
+            const result = normalizeHistoryTextFilter(value);
+            expect(result).toEqual({
+                filterValue: value,
+                malformed: false,
+                clearInput: false
+            });
+            expect(result.filterValue.slice(1, -1)).toBe(inner);
+        });
+    });
+});
 
 describe('History filter state composition', () => {
     it('detailed onColumnFilter merges native action changes while preserving manual filters', () => {
@@ -466,7 +628,7 @@ describe('History filter state composition', () => {
         wrapper.destroy();
     });
 
-    it('detailed episode and provider filters preserve quoted backend values', () => {
+    it('detailed episode and provider filters preserve quoted backend values', async () => {
         const { wrapper } = mountDetailed();
 
         wrapper.vm.updateResource({
@@ -475,6 +637,8 @@ describe('History filter state composition', () => {
             }
         });
         expect(wrapper.vm.remoteHistory.filter.columnFilters.resource).toBe("'  quoted episode  '");
+        await wrapper.vm.$nextTick();
+        expect(wrapper.find('input[placeholder="Show title or release"]').element.value).toBe("'  quoted episode  '");
 
         wrapper.vm.updateResource({
             currentTarget: {
@@ -489,6 +653,8 @@ describe('History filter state composition', () => {
             }
         });
         expect(wrapper.vm.remoteHistory.filter.columnFilters.providerId).toBe('"  quoted provider  "');
+        await wrapper.vm.$nextTick();
+        expect(wrapper.find('input[placeholder="Provider | Group"]').element.value).toBe('  "  quoted provider  "  ');
 
         wrapper.vm.updateProvider({
             currentTarget: {
@@ -497,6 +663,148 @@ describe('History filter state composition', () => {
         });
         expect(wrapper.vm.remoteHistory.filter.columnFilters.providerId).toBe('plain provider');
         wrapper.destroy();
+    });
+
+    it('detailed text inputs reflect existing remote filters on mount', async () => {
+        const { wrapper } = mountDetailed({
+            remote: {
+                filter: {
+                    columnFilters: {
+                        resource: 'stored episode',
+                        providerId: 'stored provider'
+                    }
+                }
+            }
+        });
+
+        await wrapper.vm.$nextTick();
+        expect([
+            wrapper.find('input[placeholder="Show title or release"]').element.value,
+            wrapper.find('input[placeholder="Provider | Group"]').element.value
+        ]).toEqual(['stored episode', 'stored provider']);
+        wrapper.destroy();
+    });
+
+    it('detailed text filters keep malformed wrappers raw-visible while storing cleaned values', () => {
+        expect.assertions(8);
+        const cases = [
+            ['resource', "'  leading only", 'leading only'],
+            ['providerId', 'trailing only"  ', 'trailing only']
+        ];
+        return Promise.all(cases.map(([field, value, expected]) => assertDetailedTextUpdate({
+            field,
+            value,
+            expected
+        })));
+    });
+
+    it('detailed text filters preserve matching wrappers, inner spaces, and internal punctuation', () => {
+        expect.assertions(16);
+        const cases = [
+            ['resource', "'  The Ogre's Bride  '", "'  The Ogre's Bride  '"],
+            ['providerId', '  "  Provider Group  "  ', '"  Provider Group  "'],
+            ['resource', '  "  Dog Days\'  "  ', '"  Dog Days\'  "'],
+            ['providerId', '  plain provider  ', 'plain provider']
+        ];
+        return Promise.all(cases.map(([field, value, expected]) => assertDetailedTextUpdate({
+            field,
+            value,
+            expected
+        })));
+    });
+
+    it('detailed empty matching pairs clear their stored and visible values', () => {
+        expect.assertions(8);
+        return Promise.all(['resource', 'providerId'].map(field => assertDetailedTextUpdate({
+            field,
+            value: "''",
+            expected: '',
+            visibleValue: ''
+        })));
+    });
+
+    it('detailed successful manual filters canonicalize malformed text while preserving the stack', () => {
+        expect.assertions(16);
+        const cases = [
+            ['updateQualityFilter', { currentTarget: { value: '1080p' } }, 'quality', '1080p'],
+            ['updateSizeFilter', { currentTarget: { value: '  > 2048  ' } }, 'size', '> 2048'],
+            ['updateSizeFilter', { currentTarget: { value: '   ' } }, 'size', ''],
+            ['updateClientStatusFilter', [{ value: 1 }, { value: 2 }], 'clientStatus', 3]
+        ];
+        return Promise.all(cases.map(([method, event, field, expected]) => assertDetailedOtherFilter({
+            method,
+            event,
+            field,
+            expected
+        })));
+    });
+
+    it('detailed cross-text and native filters canonicalize malformed inputs once', async () => {
+        const initialFilters = {
+            resource: 'old resource',
+            providerId: 'old provider',
+            quality: '720p',
+            size: '< 1024',
+            clientStatus: 1,
+            statusName: 'Downloaded'
+        };
+        const { wrapper, setCookie } = mountDetailed({
+            remote: {
+                page: 9,
+                filter: {
+                    columnFilters: initialFilters
+                }
+            }
+        });
+
+        wrapper.vm.updateResource({
+            currentTarget: {
+                value: "'  cleaned resource"
+            }
+        });
+        wrapper.vm.loadItemsDebounced.mockClear();
+        wrapper.vm.updateProvider({
+            currentTarget: {
+                value: '  "  provider group  "  '
+            }
+        });
+        expect(wrapper.vm.remoteHistory.filter.columnFilters).toEqual({
+            ...initialFilters,
+            resource: 'cleaned resource',
+            providerId: '"  provider group  "'
+        });
+        await wrapper.vm.$nextTick();
+        expect(wrapper.find('input[placeholder="Show title or release"]').element.value).toBe('cleaned resource');
+        expect(wrapper.find('input[placeholder="Provider | Group"]').element.value).toBe('  "  provider group  "  ');
+        expect(wrapper.vm.remoteHistory.page).toBe(1);
+        expect(wrapper.vm.loadItemsDebounced).toHaveBeenCalledTimes(1);
+
+        wrapper.vm.updateProvider({
+            currentTarget: {
+                value: "'  cleaned provider"
+            }
+        });
+        wrapper.vm.loadItemsDebounced.mockClear();
+        setCookie.mockClear();
+        wrapper.vm.onColumnFilter({
+            columnFilters: {
+                statusName: 'Failed'
+            }
+        });
+
+        return wrapper.vm.$nextTick().then(() => {
+            expect(wrapper.find('input[placeholder="Provider | Group"]').element.value).toBe('cleaned provider');
+            expect(wrapper.vm.remoteHistory.filter.columnFilters).toEqual({
+                ...initialFilters,
+                resource: 'cleaned resource',
+                providerId: 'cleaned provider',
+                statusName: 'Failed'
+            });
+            expect(wrapper.vm.remoteHistory.page).toBe(1);
+            expect(wrapper.vm.loadItemsDebounced).toHaveBeenCalledTimes(1);
+            expect(setCookie).toHaveBeenCalledWith('filter', wrapper.vm.remoteHistory.filter);
+            wrapper.destroy();
+        });
     });
 
     it('detailed size filter canonicalizes valid values, including quoted values', () => {
@@ -617,6 +925,31 @@ describe('History filter state composition', () => {
         wrapper.destroy();
     });
 
+    it('detailed invalid size input leaves malformed text visible and does not reload', async () => {
+        const { wrapper } = mountDetailed();
+        const malformedResource = "'  still editing";
+        wrapper.vm.updateResource({
+            currentTarget: {
+                value: malformedResource
+            }
+        });
+        await wrapper.vm.$nextTick();
+        const filterBefore = JSON.parse(JSON.stringify(wrapper.vm.remoteHistory.filter));
+        wrapper.vm.loadItemsDebounced.mockClear();
+
+        wrapper.vm.updateSizeFilter({
+            currentTarget: {
+                value: '<= 1024'
+            }
+        });
+        await wrapper.vm.$nextTick();
+
+        expect(wrapper.find('input[placeholder="Show title or release"]').element.value).toBe(malformedResource);
+        expect(wrapper.vm.remoteHistory.filter).toEqual(filterBefore);
+        expect(wrapper.vm.loadItemsDebounced).toHaveBeenCalledTimes(0);
+        wrapper.destroy();
+    });
+
     it('detailed size filter clears matching quote-only values for each wrapper', () => {
         const { wrapper } = mountDetailed({
             remote: {
@@ -723,6 +1056,7 @@ describe('History filter state composition', () => {
         compact.vm.loadItemsDebounced = jest.fn();
 
         await compact.vm.$nextTick();
+        expect(compact.find('input[placeholder="Show title or release"]').element.value).toBe('old compact');
         expect(getPaginationOptions(compact).setCurrentPage).toBe(7);
         expect(getPaginationOptions(detailed).setCurrentPage).toBe(10);
 
@@ -754,6 +1088,44 @@ describe('History filter state composition', () => {
         expect(detailedSetCookie).toHaveBeenCalledTimes(0);
         detailed.destroy();
         compact.destroy();
+    });
+
+    it('compact resource filter trims unquoted input while retaining the raw value', async () => {
+        expect.assertions(4);
+        await assertCompactResourceUpdate({
+            page: 6,
+            value: '  compact title  ',
+            expected: 'compact title',
+            existingFilters: {
+                statusName: 'Downloaded',
+                clientStatus: 5
+            }
+        });
+    });
+
+    it('compact resource filter stores cleaned malformed input while retaining its raw value', async () => {
+        expect.assertions(4);
+        await assertCompactResourceUpdate({
+            page: 4,
+            value: "  'compact malformed",
+            expected: 'compact malformed'
+        });
+    });
+
+    it('compact resource filter preserves non-empty matching wrappers and inner spaces', async () => {
+        expect.assertions(4);
+        await assertCompactResourceUpdate({
+            page: 3,
+            value: '  "  compact title  "  ',
+            expected: '"  compact title  "'
+        });
+    });
+
+    it('compact resource filter clears each empty matching wrapper', async () => {
+        expect.assertions(12);
+        await assertCompactResourceUpdate({ page: 5, value: "''", expected: '', visibleValue: '' });
+        await assertCompactResourceUpdate({ page: 5, value: '""', expected: '', visibleValue: '' });
+        await assertCompactResourceUpdate({ page: 5, value: '``', expected: '', visibleValue: '' });
     });
 
     it('detailed mutations do not alter compact state', async () => {
