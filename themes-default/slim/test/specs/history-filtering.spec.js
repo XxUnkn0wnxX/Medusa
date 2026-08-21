@@ -163,6 +163,13 @@ const mountCompact = (history = {}) => {
     };
 };
 
+const getPaginationOptions = wrapper => {
+    const table = wrapper.vm.$children.find(child => {
+        return child && child.$props && Object.prototype.hasOwnProperty.call(child.$props, 'paginationOptions');
+    });
+    return table && table.$props && table.$props.paginationOptions;
+};
+
 describe('History filter state composition', () => {
     it('detailed onColumnFilter merges native action changes while preserving manual filters', () => {
         const { wrapper, setCookie } = mountDetailed({
@@ -203,6 +210,58 @@ describe('History filter state composition', () => {
         });
         expect(wrapper.vm.loadItemsDebounced).toHaveBeenCalledTimes(1);
         expect(setCookie).toHaveBeenCalledWith('filter', wrapper.vm.remoteHistory.filter);
+        wrapper.destroy();
+    });
+
+    it('detailed pager options track page and remain on first page when episode/resource filter is set and cleared', async () => {
+        const { wrapper } = mountDetailed({
+            remote: {
+                page: 4,
+                filter: {
+                    columnFilters: {
+                        resource: 'The Show',
+                        providerId: 'provider-a',
+                        quality: '1080p',
+                        size: '< 1024',
+                        clientStatus: 5,
+                        statusName: 'Downloaded'
+                    }
+                }
+            }
+        });
+
+        wrapper.vm.loadItemsDebounced.mockClear();
+
+        expect(getPaginationOptions(wrapper).setCurrentPage).toBe(4);
+
+        wrapper.vm.onPageChange({
+            currentPage: 2
+        });
+        await wrapper.vm.$nextTick();
+        expect(wrapper.vm.remoteHistory.page).toBe(2);
+        expect(getPaginationOptions(wrapper).setCurrentPage).toBe(2);
+        wrapper.vm.loadItemsDebounced.mockClear();
+
+        wrapper.vm.updateResource({
+            currentTarget: {
+                value: 'new resource'
+            }
+        });
+        expect(wrapper.vm.remoteHistory.page).toBe(1);
+        expect(wrapper.vm.loadItemsDebounced).toHaveBeenCalledTimes(1);
+        await wrapper.vm.$nextTick();
+        expect(getPaginationOptions(wrapper).setCurrentPage).toBe(1);
+
+        wrapper.vm.loadItemsDebounced.mockClear();
+        wrapper.vm.updateResource({
+            currentTarget: {
+                value: ''
+            }
+        });
+        expect(wrapper.vm.remoteHistory.page).toBe(1);
+        expect(wrapper.vm.loadItemsDebounced).toHaveBeenCalledTimes(1);
+        await wrapper.vm.$nextTick();
+        expect(getPaginationOptions(wrapper).setCurrentPage).toBe(1);
         wrapper.destroy();
     });
 
@@ -353,6 +412,112 @@ describe('History filter state composition', () => {
         wrapper.destroy();
     });
 
+    it('detailed provider filter trims outer whitespace and preserves the filter stack', () => {
+        const initialFilters = {
+            resource: 'old resource',
+            providerId: 'old provider',
+            quality: '720p',
+            size: '< 1024',
+            clientStatus: 1,
+            statusName: 'Downloaded'
+        };
+        const { wrapper } = mountDetailed({
+            remote: {
+                page: 9,
+                filter: {
+                    columnFilters: initialFilters
+                }
+            }
+        });
+        const cases = [
+            {
+                value: '  leading provider',
+                expected: 'leading provider'
+            },
+            {
+                value: 'trailing provider  ',
+                expected: 'trailing provider'
+            },
+            {
+                value: '  both sides provider  ',
+                expected: 'both sides provider'
+            },
+            {
+                value: '   ',
+                expected: ''
+            }
+        ];
+
+        cases.forEach(({ value, expected }) => {
+            wrapper.vm.loadItemsDebounced.mockClear();
+            wrapper.vm.updateProvider({
+                currentTarget: {
+                    value
+                }
+            });
+            expect(wrapper.vm.remoteHistory.filter.columnFilters).toEqual({
+                ...initialFilters,
+                providerId: expected
+            });
+            expect(wrapper.vm.remoteHistory.page).toBe(1);
+            expect(wrapper.vm.loadItemsDebounced).toHaveBeenCalledTimes(1);
+        });
+        wrapper.destroy();
+    });
+
+    it('detailed size filter trims outer whitespace and preserves the filter stack', () => {
+        const initialFilters = {
+            resource: 'old resource',
+            providerId: 'old provider',
+            quality: '720p',
+            size: '< 1024',
+            clientStatus: 1,
+            statusName: 'Downloaded'
+        };
+        const { wrapper } = mountDetailed({
+            remote: {
+                page: 9,
+                filter: {
+                    columnFilters: initialFilters
+                }
+            }
+        });
+        const cases = [
+            {
+                value: '  > 1024',
+                expected: '> 1024'
+            },
+            {
+                value: '> 1024  ',
+                expected: '> 1024'
+            },
+            {
+                value: '  > 1024  ',
+                expected: '> 1024'
+            },
+            {
+                value: '   ',
+                expected: ''
+            }
+        ];
+
+        cases.forEach(({ value, expected }) => {
+            wrapper.vm.loadItemsDebounced.mockClear();
+            wrapper.vm.updateSizeFilter({
+                currentTarget: {
+                    value
+                }
+            });
+            expect(wrapper.vm.remoteHistory.filter.columnFilters).toEqual({
+                ...initialFilters,
+                size: expected
+            });
+            expect(wrapper.vm.remoteHistory.page).toBe(1);
+            expect(wrapper.vm.loadItemsDebounced).toHaveBeenCalledTimes(1);
+        });
+        wrapper.destroy();
+    });
+
     it('detailed manual update from null filter is safe', () => {
         const { wrapper } = mountDetailed({
             remote: {
@@ -378,7 +543,7 @@ describe('History filter state composition', () => {
         wrapper.destroy();
     });
 
-    it('compact resource filter preserves existing filter keys and only updates remoteCompact page', () => {
+    it('compact resource filter preserves existing filter keys and only updates remoteCompact page', async () => {
         const sharedHistory = {
             remote: {
                 page: 10,
@@ -433,11 +598,16 @@ describe('History filter state composition', () => {
         detailed.vm.loadItemsDebounced = jest.fn();
         compact.vm.loadItemsDebounced = jest.fn();
 
+        await compact.vm.$nextTick();
+        expect(getPaginationOptions(compact).setCurrentPage).toBe(7);
+        expect(getPaginationOptions(detailed).setCurrentPage).toBe(10);
+
         compact.vm.updateResource({
             currentTarget: {
                 value: 'new compact'
             }
         });
+        await compact.vm.$nextTick();
 
         expect(compact.vm.remoteHistory.page).toBe(1);
         expect(compact.vm.remoteHistory.filter.columnFilters).toEqual({
@@ -451,6 +621,9 @@ describe('History filter state composition', () => {
                 other: 'detail only'
             }
         });
+        await compact.vm.$nextTick();
+        expect(getPaginationOptions(compact).setCurrentPage).toBe(1);
+        expect(getPaginationOptions(detailed).setCurrentPage).toBe(10);
         expect(compact.vm.loadItemsDebounced).toHaveBeenCalledTimes(1);
         expect(detailed.vm.loadItemsDebounced).toHaveBeenCalledTimes(0);
         expect(compactSetCookie).toHaveBeenCalledTimes(0);
@@ -459,7 +632,7 @@ describe('History filter state composition', () => {
         compact.destroy();
     });
 
-    it('detailed mutations do not alter compact state', () => {
+    it('detailed mutations do not alter compact state', async () => {
         const sharedHistory = {
             remote: {
                 page: 5,
@@ -517,6 +690,9 @@ describe('History filter state composition', () => {
 
         const compactPageBefore = compact.vm.remoteHistory.page;
         const compactFilterBefore = JSON.parse(JSON.stringify(compact.vm.remoteHistory.filter));
+        await compact.vm.$nextTick();
+        expect(getPaginationOptions(detailed).setCurrentPage).toBe(5);
+        expect(getPaginationOptions(compact).setCurrentPage).toBe(8);
         detailed.vm.updateResource({
             currentTarget: {
                 value: 'detailed-updated'
@@ -526,6 +702,8 @@ describe('History filter state composition', () => {
         expect(compact.vm.remoteHistory.page).toBe(compactPageBefore);
         expect(compact.vm.remoteHistory.filter).toEqual(compactFilterBefore);
         expect(compact.vm.remoteHistory.filter).not.toEqual(detailed.vm.remoteHistory.filter);
+        expect(getPaginationOptions(compact).setCurrentPage).toBe(8);
+        expect(getPaginationOptions(detailed).setCurrentPage).toBe(5);
         expect(detailed.vm.loadItemsDebounced).toHaveBeenCalledTimes(1);
         expect(compact.vm.loadItemsDebounced).toHaveBeenCalledTimes(0);
         expect(compactSetCookie).toHaveBeenCalledTimes(0);
@@ -533,7 +711,7 @@ describe('History filter state composition', () => {
         detailed.destroy();
     });
 
-    it('compact mutations do not alter detailed state', () => {
+    it('compact mutations do not alter detailed state', async () => {
         const sharedHistory = {
             remote: {
                 page: 5,
@@ -591,15 +769,21 @@ describe('History filter state composition', () => {
 
         const detailedPageBefore = detailed.vm.remoteHistory.page;
         const detailedFilterBefore = JSON.parse(JSON.stringify(detailed.vm.remoteHistory.filter));
+        await compact.vm.$nextTick();
+        expect(getPaginationOptions(compact).setCurrentPage).toBe(8);
+        expect(getPaginationOptions(detailed).setCurrentPage).toBe(5);
         compact.vm.updateResource({
             currentTarget: {
                 value: 'compact-updated'
             }
         });
+        await compact.vm.$nextTick();
         expect(compact.vm.remoteHistory.filter.columnFilters.resource).toBe('compact-updated');
         expect(compact.vm.remoteHistory.page).toBe(1);
         expect(detailed.vm.remoteHistory.page).toBe(detailedPageBefore);
         expect(detailed.vm.remoteHistory.filter).toEqual(detailedFilterBefore);
+        expect(getPaginationOptions(compact).setCurrentPage).toBe(1);
+        expect(getPaginationOptions(detailed).setCurrentPage).toBe(5);
         expect(detailed.vm.loadItemsDebounced).toHaveBeenCalledTimes(0);
         expect(compact.vm.loadItemsDebounced).toHaveBeenCalledTimes(1);
         expect(compactSetCookie).toHaveBeenCalledTimes(0);
@@ -645,6 +829,55 @@ describe('History filter state composition', () => {
         expect(wrapper.vm.remoteHistory.page).toBe(1);
         expect(wrapper.vm.loadItemsDebounced).toHaveBeenCalledTimes(1);
         expect(setCookie).toHaveBeenCalledTimes(0);
+        wrapper.destroy();
+    });
+
+    it('compact pager options track page and remain on first page when episode/resource filter is set and cleared', async () => {
+        const { wrapper } = mountCompact({
+            remoteCompact: {
+                page: 6,
+                filter: {
+                    columnFilters: {
+                        resource: 'compact show',
+                        statusName: 'Downloaded',
+                        clientStatus: 5
+                    }
+                }
+            }
+        });
+
+        wrapper.vm.loadItemsDebounced.mockClear();
+
+        expect(getPaginationOptions(wrapper).setCurrentPage).toBe(6);
+
+        wrapper.vm.onPageChange({
+            currentPage: 3
+        });
+        await wrapper.vm.$nextTick();
+        expect(wrapper.vm.remoteHistory.page).toBe(3);
+        expect(getPaginationOptions(wrapper).setCurrentPage).toBe(3);
+        wrapper.vm.loadItemsDebounced.mockClear();
+
+        wrapper.vm.updateResource({
+            currentTarget: {
+                value: 'new compact resource'
+            }
+        });
+        expect(wrapper.vm.remoteHistory.page).toBe(1);
+        expect(wrapper.vm.loadItemsDebounced).toHaveBeenCalledTimes(1);
+        await wrapper.vm.$nextTick();
+        expect(getPaginationOptions(wrapper).setCurrentPage).toBe(1);
+
+        wrapper.vm.loadItemsDebounced.mockClear();
+        wrapper.vm.updateResource({
+            currentTarget: {
+                value: ''
+            }
+        });
+        expect(wrapper.vm.remoteHistory.page).toBe(1);
+        expect(wrapper.vm.loadItemsDebounced).toHaveBeenCalledTimes(1);
+        await wrapper.vm.$nextTick();
+        expect(getPaginationOptions(wrapper).setCurrentPage).toBe(1);
         wrapper.destroy();
     });
 

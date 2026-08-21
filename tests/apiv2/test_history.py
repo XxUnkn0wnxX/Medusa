@@ -358,7 +358,13 @@ async def test_episode_title_and_status_filter_are_combined_as_and(history_db, f
 
 
 @pytest.mark.gen_test
-async def test_episode_filter_with_provider_is_case_insensitive_and_partial(history_db, fetch_history):
+@pytest.mark.parametrize(
+    'provider_filter',
+    ['unit provider', ' unit provider', 'unit provider ', ' unit provider ']
+)
+async def test_episode_filter_with_provider_is_case_insensitive_partial_and_trims_outer_whitespace(
+    history_db, fetch_history, provider_filter
+):
     matching_row = _insert_history_row(
         history_db,
         DOWNLOADED,
@@ -372,7 +378,78 @@ async def test_episode_filter_with_provider_is_case_insensitive_and_partial(hist
         provider='External Source'
     )
 
-    rows = json.loads((await fetch_history('My English Title', column_filters={'providerId': 'unit provider'})).body)
+    rows = json.loads((await fetch_history(
+        'My English Title', column_filters={'providerId': provider_filter}
+    )).body)
+
+    assert {row['id'] for row in rows} == {matching_row}
+
+
+@pytest.mark.gen_test
+async def test_episode_filter_with_whitespace_only_provider_preserves_other_filters(history_db, fetch_history):
+    matching_row = _insert_history_row(
+        history_db,
+        DOWNLOADED,
+        'provider-whitespace-match.mkv',
+        quality=Quality.HDTV
+    )
+    _insert_history_row(
+        history_db,
+        DOWNLOADED,
+        'provider-whitespace-quality-miss.mkv',
+        quality=Quality.FULLHDTV
+    )
+
+    rows = json.loads((await fetch_history(
+        'My English Title', column_filters={'providerId': '   ', 'quality': Quality.HDTV}
+    )).body)
+
+    assert {row['id'] for row in rows} == {matching_row}
+
+
+@pytest.mark.gen_test
+@pytest.mark.parametrize('size_filter', ['> 4', ' > 4', '> 4 ', ' > 4 '])
+async def test_episode_filter_with_size_trims_outer_whitespace(history_db, fetch_history, size_filter):
+    matching_row = _insert_history_row(
+        history_db,
+        SNATCHED,
+        'size-whitespace-match.mkv',
+        size=8 * 1024 * 1024
+    )
+    _insert_history_row(
+        history_db,
+        SNATCHED,
+        'size-whitespace-miss.mkv',
+        size=2 * 1024 * 1024
+    )
+
+    rows = json.loads((await fetch_history(
+        'My English Title', column_filters={'size': size_filter}
+    )).body)
+
+    assert {row['id'] for row in rows} == {matching_row}
+
+
+@pytest.mark.gen_test
+async def test_episode_filter_with_whitespace_only_size_preserves_other_filters(history_db, fetch_history):
+    matching_row = _insert_history_row(
+        history_db,
+        SNATCHED,
+        'size-whitespace-quality-match.mkv',
+        quality=Quality.HDTV,
+        size=2 * 1024 * 1024
+    )
+    _insert_history_row(
+        history_db,
+        SNATCHED,
+        'size-whitespace-quality-miss.mkv',
+        quality=Quality.FULLHDTV,
+        size=8 * 1024 * 1024
+    )
+
+    rows = json.loads((await fetch_history(
+        'My English Title', column_filters={'size': '   ', 'quality': Quality.HDTV}
+    )).body)
 
     assert {row['id'] for row in rows} == {matching_row}
 

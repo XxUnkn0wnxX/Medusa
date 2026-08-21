@@ -20,6 +20,7 @@
                 perPage: remoteHistory.perPage,
                 perPageDropdown,
                 dropdownAllowAll: false,
+                setCurrentPage: remoteHistory.page,
                 position: 'both'
             }"
             :column-filter-options="{
@@ -370,7 +371,7 @@ export default {
          */
         updateSizeFilter(size) {
             // Check for valid syntax, and pass along.
-            size = size.currentTarget.value;
+            size = size.currentTarget.value.trim();
             if (!size) {
                 this.updateFilterValue('size', size);
                 return;
@@ -387,7 +388,7 @@ export default {
             this.updateFilterValue('resource', resource);
         },
         updateProvider(provider) {
-            provider = provider.currentTarget.value;
+            provider = provider.currentTarget.value.trim();
             this.updateFilterValue('providerId', provider);
         },
         // Load items is what brings back the rows from server

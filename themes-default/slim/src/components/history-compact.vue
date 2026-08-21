@@ -24,6 +24,7 @@
                 perPage: remoteHistory.perPage,
                 perPageDropdown,
                 dropdownAllowAll: false,
+                setCurrentPage: remoteHistory.page,
                 position: 'both'
             }"
             :column-filter-options="{
