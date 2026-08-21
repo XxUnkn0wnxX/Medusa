@@ -110,6 +110,8 @@ class HistoryHandler(BaseRequestHandler):
             size = filter['columnFilters'].pop('size', None)
             provider = filter['columnFilters'].pop('providerId', None)
             resource = filter['columnFilters'].pop('resource', None)
+            if isinstance(resource, str):
+                resource = resource.strip() or None
 
             if size:
                 size_operator, size = size.split(' ')

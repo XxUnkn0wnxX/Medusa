@@ -169,6 +169,82 @@ async def test_resource_filter_case_variants(history_db, fetch_history, resource
 @pytest.mark.parametrize(
     'resource_filter',
     [
+        '  My English Title',
+        'My English Title  ',
+        '  English',
+        'English  ',
+        '  my english title  ',
+        '  Romaji Scene Title',
+        'Romaji Scene Title  ',
+        '  Scene Title',
+        'Scene Title  ',
+    ]
+)
+async def test_resource_filter_outer_whitespace_is_trimmed(history_db, fetch_history, resource_filter):
+    canonical_row = _insert_history_row(history_db, DOWNLOADED, 'canonical.mkv')
+    alias_row = _insert_history_row(history_db, SNATCHED, 'alias-match.mkv')
+    response = await fetch_history(resource_filter)
+    rows = json.loads(response.body)
+
+    assert response.code == 200
+    assert {row['id'] for row in rows} == {canonical_row, alias_row}
+
+
+@pytest.mark.gen_test
+async def test_resource_filter_trailing_space_uses_identity_rows(history_db, fetch_history):
+    spaced_row = _insert_history_row(history_db, DOWNLOADED, 'My English Title - bonus.mkv')
+    identity_only_row = _insert_history_row(history_db, SNATCHED, 'identity-only.mkv')
+
+    rows = json.loads((await fetch_history('My English Title ')).body)
+
+    assert {row['id'] for row in rows} == {spaced_row, identity_only_row}
+
+
+@pytest.mark.gen_test
+@pytest.mark.parametrize(
+    'resource_filter',
+    [
+        '  My English Title - s01e05',
+        'My English Title - s01e05  ',
+        '  My English Title - s01e05  ',
+        '  my english title - s01e05  ',
+    ]
+)
+async def test_rendered_episode_filter_trims_outer_whitespace(history_db, fetch_history, resource_filter):
+    matching_row = _insert_history_row(history_db, DOWNLOADED, 'ep-05.mkv', episode=5)
+    _insert_history_row(history_db, SNATCHED, 'ep-06.mkv', episode=6)
+
+    rows = json.loads((await fetch_history(resource_filter)).body)
+
+    assert {row['id'] for row in rows} == {matching_row}
+    assert all(row['episode'] == 5 for row in rows)
+
+
+@pytest.mark.gen_test
+@pytest.mark.parametrize('resource_filter', ['  DirectResourceMatch  ', 'DirectResourceMatch  ', '  DirectResourceMatch'])
+async def test_direct_resource_filter_trims_whitespace_and_stays_row_local(history_db, fetch_history, resource_filter):
+    direct_resource_row = _insert_history_row(history_db, DOWNLOADED, 'DirectResourceMatch.mkv')
+    _insert_history_row(history_db, SNATCHED, 'OtherResource.mkv')
+
+    rows = json.loads((await fetch_history(resource_filter)).body)
+
+    assert {row['id'] for row in rows} == {direct_resource_row}
+
+
+@pytest.mark.gen_test
+async def test_whitespace_only_resource_filter_is_treated_as_empty(history_db, fetch_history):
+    alpha_row = _insert_history_row(history_db, DOWNLOADED, 'alpha.mkv', provider='ProviderAlpha')
+    _insert_history_row(history_db, DOWNLOADED, 'beta.mkv', provider='ProviderBeta')
+
+    rows = json.loads((await fetch_history('   ', column_filters={'providerId': 'provideralpha'})).body)
+
+    assert {row['id'] for row in rows} == {alpha_row}
+
+
+@pytest.mark.gen_test
+@pytest.mark.parametrize(
+    'resource_filter',
+    [
         'Romaji Scene Title',
         'Scene Title',
         'romaji scene title',
