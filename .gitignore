@@ -4,6 +4,11 @@
 /cache-*/
 /Logs/
 /data/
+/tmp/
+/AGENTS.md
+/Backup
+/Session.cfg
+/requirements-local.txt
 restore/
 backup*/
 backup-*.zip
@@ -32,6 +37,7 @@ server.key
 *.py[cod]
 
 venv
+.venv/
 
 #  IDE specific      #
 ######################
@@ -70,6 +76,7 @@ Thumbs.db
 build/
 dist/
 pymedusa.egg-info
+*.egg-info/
 .eggs
 
 # Grunt/Gulp/Node build related #

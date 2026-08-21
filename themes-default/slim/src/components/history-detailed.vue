@@ -96,7 +96,7 @@
 
             <template #column-filter="{ column }">
                 <span v-if="column.field === 'episodeTitle'">
-                    <input placeholder="Resource" class="'form-control input-sm vgt-input" @input="updateResource">
+                    <input placeholder="Show title or release" class="'form-control input-sm vgt-input" @input="updateResource">
                 </span>
 
                 <span v-else-if="column.field === 'providerId'">
@@ -322,27 +322,45 @@ export default {
             this.loadItemsDebounced();
         },
         onColumnFilter(params) {
-            this.setCookie('filter', params);
-            this.remoteHistory.filter = params;
+            const nextFilter = params && Object.prototype.hasOwnProperty.call(params, 'columnFilters') ? params.columnFilters : params || {};
+            const currentFilters = this.remoteHistory.filter && this.remoteHistory.filter.columnFilters ? this.remoteHistory.filter.columnFilters : {};
+            const manualKeys = ['resource', 'providerId', 'quality', 'size', 'clientStatus'];
+            const manualFilters = manualKeys.reduce((result, key) => {
+                if (Object.prototype.hasOwnProperty.call(currentFilters, key)) {
+                    result[key] = currentFilters[key];
+                }
+                return result;
+            }, {});
+
+            this.applyFilter(Object.assign({}, manualFilters, nextFilter), true);
+        },
+        applyFilter(columnFilters, persistFilterCookie) {
+            const nextFilter = Object.assign({}, this.remoteHistory.filter, {
+                columnFilters
+            });
+            this.remoteHistory.filter = nextFilter;
+            if (persistFilterCookie) {
+                this.setCookie('filter', nextFilter);
+            }
+            this.remoteHistory.page = 1;
             this.loadItemsDebounced();
+        },
+        updateFilterValue(field, value) {
+            const currentFilters = this.remoteHistory.filter && this.remoteHistory.filter.columnFilters ? this.remoteHistory.filter.columnFilters : {};
+            const columnFilters = Object.assign({}, currentFilters, {
+                [field]: value
+            });
+            this.applyFilter(columnFilters, false);
         },
         updateClientStatusFilter(event) {
             const combinedStatus = event.reduce((result, item) => {
                 return result | item.value;
             }, 0);
-            if (!this.remoteHistory.filter) {
-                this.remoteHistory.filter = { columnFilters: {} };
-            }
             this.selectedClientStatusValue = event;
-            this.remoteHistory.filter.columnFilters.clientStatus = combinedStatus;
-            this.loadItemsDebounced();
+            this.updateFilterValue('clientStatus', combinedStatus);
         },
         updateQualityFilter(quality) {
-            if (!this.remoteHistory.filter) {
-                this.remoteHistory.filter = { columnFilters: {} };
-            }
-            this.remoteHistory.filter.columnFilters.quality = quality.currentTarget.value;
-            this.loadItemsDebounced();
+            this.updateFilterValue('quality', quality.currentTarget.value);
         },
         /**
          * Update the size filter.
@@ -354,38 +372,23 @@ export default {
             // Check for valid syntax, and pass along.
             size = size.currentTarget.value;
             if (!size) {
-                this.remoteHistory.filter.columnFilters.size = size;
-                this.loadItemsDebounced();
+                this.updateFilterValue('size', size);
                 return;
             }
 
             const validSizeRegex = /[<>] \d{2,6}/;
             if (size.match(validSizeRegex)) {
                 this.invalidSizeMessage = '';
-                if (!this.remoteHistory.filter) {
-                    this.remoteHistory.filter = { columnFilters: {} };
-                }
-                this.remoteHistory.filter.columnFilters.size = size;
-                this.loadItemsDebounced();
+                this.updateFilterValue('size', size);
             }
         },
         updateResource(resource) {
             resource = resource.currentTarget.value;
-            if (!this.remoteHistory.filter) {
-                this.remoteHistory.filter = { columnFilters: {} };
-            }
-
-            this.remoteHistory.filter.columnFilters.resource = resource;
-            this.loadItemsDebounced();
+            this.updateFilterValue('resource', resource);
         },
         updateProvider(provider) {
             provider = provider.currentTarget.value;
-            if (!this.remoteHistory.filter) {
-                this.remoteHistory.filter = { columnFilters: {} };
-            }
-
-            this.remoteHistory.filter.columnFilters.providerId = provider;
-            this.loadItemsDebounced();
+            this.updateFilterValue('providerId', provider);
         },
         // Load items is what brings back the rows from server
         loadItems() {

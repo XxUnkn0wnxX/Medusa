@@ -91,7 +91,7 @@
 
             <template #column-filter="{ column }">
                 <span v-if="column.field === 'episodeTitle'">
-                    <input placeholder="Resource" class="'form-control input-sm vgt-input" @input="updateResource">
+                    <input placeholder="Show title or release" class="'form-control input-sm vgt-input" @input="updateResource">
                 </span>
             </template>
         </vue-good-table>
@@ -261,35 +261,39 @@ export default {
             this.loadItemsDebounced();
         },
         onColumnFilter(params) {
-            this.remoteHistory.filter = params;
+            const nextFilter = params && Object.prototype.hasOwnProperty.call(params, 'columnFilters') ? params.columnFilters : params || {};
+            const currentFilters = this.remoteHistory.filter && this.remoteHistory.filter.columnFilters ? this.remoteHistory.filter.columnFilters : {};
+            const preservedResource = Object.prototype.hasOwnProperty.call(currentFilters, 'resource') ? { resource: currentFilters.resource } : {};
+            this.applyFilter(Object.assign({}, preservedResource, nextFilter));
+        },
+        applyFilter(columnFilters) {
+            const nextFilter = Object.assign({}, this.remoteHistory.filter, {
+                columnFilters
+            });
+            this.remoteHistory.filter = nextFilter;
+            this.remoteHistory.page = 1;
             this.loadItemsDebounced();
+        },
+        updateFilterValue(field, value) {
+            const currentFilters = this.remoteHistory.filter && this.remoteHistory.filter.columnFilters ? this.remoteHistory.filter.columnFilters : {};
+            const columnFilters = Object.assign({}, currentFilters, {
+                [field]: value
+            });
+            this.applyFilter(columnFilters);
         },
         updateClientStatusFilter(event) {
             const combinedStatus = event.reduce((result, item) => {
                 return result | item.value;
             }, 0);
-            if (!this.remoteHistory.filter) {
-                this.remoteHistory.filter = { columnFilters: {} };
-            }
             this.selectedClientStatusValue = event;
-            this.remoteHistory.filter.columnFilters.clientStatus = combinedStatus;
-            this.loadItemsDebounced();
+            this.updateFilterValue('clientStatus', combinedStatus);
         },
         updateQualityFilter(quality) {
-            if (!this.remoteHistory.filter) {
-                this.remoteHistory.filter = { columnFilters: {} };
-            }
-            this.remoteHistory.filter.columnFilters.quality = quality.currentTarget.value;
-            this.loadItemsDebounced();
+            this.updateFilterValue('quality', quality.currentTarget.value);
         },
         updateResource(resource) {
             resource = resource.currentTarget.value;
-            if (!this.remoteHistory.filter) {
-                this.remoteHistory.filter = { columnFilters: {} };
-            }
-
-            this.remoteHistory.filter.columnFilters.resource = resource;
-            this.loadItemsDebounced();
+            this.updateFilterValue('resource', resource);
         },
         // Load items is what brings back the rows from server
         loadItems() {

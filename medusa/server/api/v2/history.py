@@ -4,6 +4,7 @@ from __future__ import unicode_literals
 
 import json
 import logging
+import re
 from os.path import basename
 
 from medusa import db
@@ -32,6 +33,18 @@ class HistoryHandler(BaseRequestHandler):
     path_param = ('path_param', r'\w+')
     #: allowed HTTP methods
     allowed_methods = ('GET', 'POST', 'PUT', 'DELETE')
+
+    @staticmethod
+    def _parse_episode_resource(resource):
+        """Return title, season, and episode when the input is a rendered episode text."""
+        match = re.fullmatch(
+            r'(?P<title>.+?)\s+-\s+s(?P<season>\d+)e(?P<episode>\d+)',
+            resource,
+            re.IGNORECASE
+        )
+        if not match:
+            return resource, None, None
+        return match.group('title'), int(match.group('season')), int(match.group('episode'))
 
     def get(self, series_slug, path_param):
         """
@@ -123,10 +136,45 @@ class HistoryHandler(BaseRequestHandler):
             where_with_ops += [' provider LIKE ? ']
             params.append(f'%%{provider}%%')
 
+        cte_query = ''
+        cte_params = []
+
         # Search resource with like %resource%
         if resource:
-            where_with_ops += [' resource LIKE ? ']
-            params.append(f'%%{resource}%%')
+            (resource_title_filter, resource_season, resource_episode) = self._parse_episode_resource(resource)
+            like_resource_title = f'%%{resource_title_filter}%%'
+            like_resource = f'%%{resource}%%'
+            cte_query = """
+                WITH show_match_identities AS (
+                    SELECT indexer, indexer_id
+                    FROM tv_shows
+                    WHERE LOWER(show_name) LIKE LOWER(?)
+                    UNION
+                    SELECT indexer, series_id AS indexer_id
+                    FROM scene_exceptions
+                    WHERE LOWER(title) LIKE LOWER(?)
+                )
+            """
+            cte_params.extend([like_resource_title, like_resource_title])
+            if resource_season is not None and resource_episode is not None:
+                where_with_ops += [
+                    '(LOWER(resource) LIKE LOWER(?) OR EXISTS ('
+                    ' SELECT 1 FROM show_match_identities sm'
+                    ' WHERE sm.indexer = history.indexer_id'
+                    ' AND sm.indexer_id = history.showid'
+                    ' AND history.season = ? AND history.episode = ?'
+                    '))'
+                ]
+                params += [like_resource, resource_season, resource_episode]
+            else:
+                where_with_ops += [
+                    '(LOWER(resource) LIKE LOWER(?) OR EXISTS ('
+                    ' SELECT 1 FROM show_match_identities sm'
+                    ' WHERE sm.indexer = history.indexer_id'
+                    ' AND sm.indexer_id = history.showid'
+                    '))'
+                ]
+                params.append(like_resource)
 
         if where:
             sql_base += ' WHERE ' + ' AND '.join(f'{item} = ?' for item in where)
@@ -145,7 +193,7 @@ class HistoryHandler(BaseRequestHandler):
             sql_base += ' LIMIT ?'
             params += [total_rows]
 
-        results = db.DBConnection().select(sql_base, params)
+        results = db.DBConnection().select(cte_query + sql_base, cte_params + params)
 
         if compact_layout:
             from collections import OrderedDict
