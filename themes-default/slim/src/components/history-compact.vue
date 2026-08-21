@@ -290,6 +290,14 @@ export default {
             if (this.restoringSortHeader) {
                 return;
             }
+            if (this.episodeFilter.malformed) {
+                this.updateEpisodeFilter({
+                    inputValue: this.episodeFilter.filterValue,
+                    filterValue: this.episodeFilter.filterValue,
+                    malformed: false,
+                    resetPage: false
+                });
+            }
             const sort = Array.isArray(params) ? params.filter(item => item.type !== 'none') : [];
             const canonicalSort = sort.length > 0 ? sort : [{ field: 'actionDate', type: 'desc' }];
             this.setCookie('sort', canonicalSort);

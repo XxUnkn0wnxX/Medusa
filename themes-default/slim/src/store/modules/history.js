@@ -241,19 +241,23 @@ const mutations = {
         setResourceFilter(state.remote, filterValue, false);
         setResourceFilter(state.remoteCompact, filterValue, false);
     },
-    updateEpisodeFilter(state, { inputValue, filterValue, malformed }) {
+    updateEpisodeFilter(state, { inputValue, filterValue, malformed, resetPage = true }) {
         state.episodeFilter = {
             inputValue,
             filterValue,
             malformed: Boolean(malformed),
             initialized: true
         };
-        setResourceFilter(state.remote, filterValue);
-        setResourceFilter(state.remoteCompact, filterValue);
+        setResourceFilter(state.remote, filterValue, resetPage);
+        setResourceFilter(state.remoteCompact, filterValue, resetPage);
     },
     prepareHistoryLayoutTransition(state, { layout, fromLayout = 'detailed' }) {
         if (!['compact', 'detailed'].includes(layout) || layout === fromLayout) {
             return;
+        }
+        if (state.episodeFilter.initialized && state.episodeFilter.malformed) {
+            Vue.set(state.episodeFilter, 'inputValue', state.episodeFilter.filterValue);
+            Vue.set(state.episodeFilter, 'malformed', false);
         }
         Object.keys(state.historyRequestIds).forEach(requestLayout => {
             Vue.set(state.historyRequestIds, requestLayout, state.historyRequestIds[requestLayout] + 1);

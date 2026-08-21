@@ -355,6 +355,7 @@ export default {
             if (this.restoringSortHeader) {
                 return;
             }
+            this.canonicalizeMalformedTextFilters(undefined, false);
             const sort = Array.isArray(params) ? params.filter(item => item.type !== 'none') : [];
             const canonicalSort = sort.length > 0 ? sort : [{ field: 'actionDate', type: 'desc' }];
             this.setCookie('sort', canonicalSort);
@@ -375,12 +376,13 @@ export default {
             }
             this.loadItemsDebounced();
         },
-        canonicalizeMalformedTextFilters(exceptField) {
+        canonicalizeMalformedTextFilters(exceptField, resetPage = true) {
             if (exceptField !== 'resource' && this.episodeFilter.malformed) {
                 this.updateEpisodeFilter({
                     inputValue: this.episodeFilter.filterValue,
                     filterValue: this.episodeFilter.filterValue,
-                    malformed: false
+                    malformed: false,
+                    resetPage
                 });
             }
             if (exceptField !== 'providerId' && this.malformedTextFilters.providerId) {

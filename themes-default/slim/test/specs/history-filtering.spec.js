@@ -1391,8 +1391,9 @@ describe('History filter state composition', () => {
         wrapper.destroy();
     });
 
-    it('round trips a shared malformed Episode through compact and back', async () => {
+    it('canonicalizes malformed shared Episode values on layout transition', async () => {
         const rawEpisode = "  'Round trip episode";
+        const cleanEpisode = 'Round trip episode';
         const store = createHistoryStore({
             layout: 'detailed',
             remote: {
@@ -1436,26 +1437,42 @@ describe('History filter state composition', () => {
 
         expect(store.state.history.episodeFilter).toEqual({
             inputValue: rawEpisode,
-            filterValue: 'Round trip episode',
+            filterValue: cleanEpisode,
             malformed: true,
             initialized: true
         });
         expect(store.state.history.remote.page).toBe(1);
         expect(store.state.history.remoteCompact.page).toBe(1);
-        expect(store.state.history.remote.filter.columnFilters.resource).toBe('Round trip episode');
-        expect(store.state.history.remoteCompact.filter.columnFilters.resource).toBe('Round trip episode');
-        expect(store.state.history.remote.filter.columnFilters.statusName).toBe('Downloaded');
-        expect(store.state.history.remoteCompact.filter.columnFilters.statusName).toBe('Failed');
-
-        await store.dispatch('prepareHistoryLayoutTransition', { layout: 'compact' });
         expect(store.state.history.remote.filter.columnFilters).toEqual({
-            resource: 'Round trip episode'
+            resource: cleanEpisode,
+            statusName: 'Downloaded',
+            providerId: 'provider-a',
+            quality: '1',
+            size: '< 1024',
+            clientStatus: 3
         });
         expect(store.state.history.remoteCompact.filter.columnFilters).toEqual({
-            resource: 'Round trip episode'
+            resource: cleanEpisode,
+            statusName: 'Failed'
+        });
+
+        await store.dispatch('prepareHistoryLayoutTransition', { layout: 'compact' });
+
+        expect(store.state.history.episodeFilter).toEqual({
+            inputValue: cleanEpisode,
+            filterValue: cleanEpisode,
+            malformed: false,
+            initialized: true
         });
         expect(store.state.history.remote.page).toBe(1);
         expect(store.state.history.remoteCompact.page).toBe(1);
+        expect(store.state.history.remote.filter.columnFilters).toEqual({
+            resource: cleanEpisode
+        });
+        expect(store.state.history.remoteCompact.filter.columnFilters).toEqual({
+            resource: cleanEpisode
+        });
+
         store.state.config.layout.history = 'compact';
         detailed.wrapper.destroy();
 
@@ -1464,10 +1481,18 @@ describe('History filter state composition', () => {
             AppLink: true,
             QualityPill: true
         });
-        expect(compact.wrapper.find('input[placeholder="Show title or release"]').element.value).toBe(rawEpisode);
+        expect(compact.wrapper.find('input[placeholder="Show title or release"]').element.value).toBe(cleanEpisode);
         compact.wrapper.destroy();
 
+        await store.dispatch('prepareHistoryLayoutTransition', { layout: 'detailed' });
+        expect(store.state.history.episodeFilter).toEqual({
+            inputValue: cleanEpisode,
+            filterValue: cleanEpisode,
+            malformed: false,
+            initialized: true
+        });
         store.state.config.layout.history = 'detailed';
+
         const returnedDetailed = mountHistoryComponent(HistoryDetailed, store, cookieStore, {
             VueGoodTable: VueGoodTableStub,
             AppLink: true,
@@ -1475,14 +1500,112 @@ describe('History filter state composition', () => {
             FontAwesomeIcon: true,
             Multiselect: true
         });
-        expect(returnedDetailed.wrapper.find('input[placeholder="Show title or release"]').element.value).toBe(rawEpisode);
+        expect(returnedDetailed.wrapper.find('input[placeholder="Show title or release"]').element.value).toBe(cleanEpisode);
         expect(returnedDetailed.wrapper.find('input[placeholder="Provider | Group"]').element.value).toBe('');
         expect(returnedDetailed.wrapper.find('input[placeholder="e.g. < 1024 MB"]').element.value).toBe('');
         expect(returnedDetailed.wrapper.vm.selectedClientStatusValue).toEqual([]);
         expect(store.state.history.remote.filter.columnFilters).toEqual({
-            resource: 'Round trip episode'
+            resource: cleanEpisode
         });
         returnedDetailed.wrapper.destroy();
+    });
+
+    it('canonicalizes malformed shared Episode values on Compact -> Detailed layout transition', async () => {
+        const rawEpisode = '  "Compact route malformed';
+        const cleanEpisode = 'Compact route malformed';
+        const store = createHistoryStore({
+            layout: 'compact',
+            remote: {
+                page: 4,
+                filter: {
+                    columnFilters: {
+                        resource: 'detailed episode',
+                        statusName: 'Downloaded',
+                        providerId: 'provider-a',
+                        quality: '1',
+                        size: '< 1024',
+                        clientStatus: 3
+                    }
+                }
+            },
+            remoteCompact: {
+                page: 7,
+                filter: {
+                    columnFilters: {
+                        resource: 'compact episode',
+                        statusName: 'Failed'
+                    }
+                }
+            }
+        });
+        const cookieStore = {};
+        const compact = mountHistoryComponent(HistoryCompact, store, cookieStore, {
+            VueGoodTable: VueGoodTableStub,
+            AppLink: true,
+            QualityPill: true
+        });
+
+        compact.wrapper.vm.updateResource({
+            currentTarget: {
+                value: rawEpisode
+            }
+        });
+        await compact.wrapper.vm.$nextTick();
+
+        expect(store.state.history.episodeFilter).toEqual({
+            inputValue: rawEpisode,
+            filterValue: cleanEpisode,
+            malformed: true,
+            initialized: true
+        });
+        expect(compact.wrapper.find('input[placeholder="Show title or release"]').element.value).toBe(rawEpisode);
+        expect(store.state.history.remote.page).toBe(1);
+        expect(store.state.history.remoteCompact.page).toBe(1);
+        expect(store.state.history.remote.filter.columnFilters).toEqual({
+            resource: cleanEpisode,
+            statusName: 'Downloaded',
+            providerId: 'provider-a',
+            quality: '1',
+            size: '< 1024',
+            clientStatus: 3
+        });
+        expect(store.state.history.remoteCompact.filter.columnFilters).toEqual({
+            resource: cleanEpisode,
+            statusName: 'Failed'
+        });
+
+        await store.dispatch('prepareHistoryLayoutTransition', { layout: 'detailed' });
+
+        expect(store.state.history.episodeFilter).toEqual({
+            inputValue: cleanEpisode,
+            filterValue: cleanEpisode,
+            malformed: false,
+            initialized: true
+        });
+        expect(store.state.history.remote.filter.columnFilters).toEqual({
+            resource: cleanEpisode,
+            statusName: 'Downloaded',
+            providerId: 'provider-a',
+            quality: '1',
+            size: '< 1024',
+            clientStatus: 3
+        });
+        expect(store.state.history.remoteCompact.filter.columnFilters).toEqual({
+            resource: cleanEpisode,
+            statusName: 'Failed'
+        });
+        compact.wrapper.destroy();
+
+        store.state.config.layout.history = 'detailed';
+        const detailed = mountHistoryComponent(HistoryDetailed, store, cookieStore, {
+            VueGoodTable: VueGoodTableStub,
+            AppLink: true,
+            QualityPill: true,
+            FontAwesomeIcon: true,
+            Multiselect: true
+        });
+        expect(detailed.wrapper.find('input[placeholder="Show title or release"]').element.value).toBe(cleanEpisode);
+        detailed.wrapper.destroy();
     });
 
     it('keeps shared Episode edits and clears normalized values in either layout', async () => {
@@ -1756,6 +1879,168 @@ describe('History filter state composition', () => {
         expect(store.state.history[remoteKey].sort).toEqual(ascendingSort);
         expect(wrapper.vm.serverParams.sort).toEqual(ascendingSort);
         expect(initializeSort).not.toHaveBeenCalled();
+        expect(wrapper.vm.loadItemsDebounced).toHaveBeenCalledTimes(1);
+        wrapper.destroy();
+    });
+
+    it.each([
+        ['active', [{ field: 'quality', type: 'asc' }]],
+        ['clear-to-default', [{ field: 'actionDate', type: 'none' }]]
+    ])('canonicalizes a malformed Detailed Episode filter on the %s sort', async (_name, sortEvent) => {
+        const initialFilters = {
+            resource: 'stored episode',
+            providerId: 'provider-a',
+            quality: '720p',
+            size: '< 1024',
+            clientStatus: 1,
+            statusName: 'Downloaded'
+        };
+        const { wrapper, store } = mountDetailed({
+            remote: {
+                page: 4,
+                filter: {
+                    columnFilters: initialFilters
+                }
+            }
+        });
+        const table = wrapper.vm.$refs['detailed-history'];
+
+        wrapper.vm.updateResource({
+            currentTarget: {
+                value: "'  malformed episode"
+            }
+        });
+        wrapper.vm.loadItemsDebounced.mockClear();
+        wrapper.vm.remoteHistory.page = 4;
+        store.state.history.remoteCompact.page = 7;
+
+        table.emitSort(sortEvent);
+        await wrapper.vm.$nextTick();
+
+        expect(wrapper.find('input[placeholder="Show title or release"]').element.value).toBe('malformed episode');
+        expect(store.state.history.episodeFilter).toEqual({
+            inputValue: 'malformed episode',
+            filterValue: 'malformed episode',
+            malformed: false,
+            initialized: true
+        });
+        expect(wrapper.vm.remoteHistory.filter.columnFilters).toEqual({
+            ...initialFilters,
+            resource: 'malformed episode'
+        });
+        expect(wrapper.vm.remoteHistory.page).toBe(4);
+        expect(store.state.history.remoteCompact.page).toBe(7);
+        expect(wrapper.vm.remoteHistory.sort).toEqual(sortEvent[0].type === 'none' ? [{
+            field: 'actionDate',
+            type: 'desc'
+        }] : sortEvent);
+        expect(wrapper.vm.loadItemsDebounced).toHaveBeenCalledTimes(1);
+        wrapper.destroy();
+    });
+
+    it.each([
+        ['active', [{ field: 'quality', type: 'asc' }]],
+        ['clear-to-default', [{ field: 'actionDate', type: 'none' }]]
+    ])('canonicalizes a malformed Detailed Provider filter on the %s sort', async (_name, sortEvent) => {
+        const initialFilters = {
+            resource: 'stored episode',
+            providerId: 'stored provider',
+            quality: '720p',
+            size: '< 1024',
+            clientStatus: 1,
+            statusName: 'Downloaded'
+        };
+        const { wrapper, store } = mountDetailed({
+            remote: {
+                page: 4,
+                filter: {
+                    columnFilters: initialFilters
+                }
+            }
+        });
+        const table = wrapper.vm.$refs['detailed-history'];
+
+        wrapper.vm.updateProvider({
+            currentTarget: {
+                value: "'  malformed provider"
+            }
+        });
+        wrapper.vm.loadItemsDebounced.mockClear();
+        wrapper.vm.remoteHistory.page = 4;
+
+        table.emitSort(sortEvent);
+        await wrapper.vm.$nextTick();
+
+        expect(wrapper.find('input[placeholder="Provider | Group"]').element.value).toBe('malformed provider');
+        expect(wrapper.vm.providerFilterValue).toBe('malformed provider');
+        expect(wrapper.vm.malformedTextFilters.providerId).toBe(false);
+        expect(store.state.history.episodeFilter).toEqual({
+            inputValue: 'stored episode',
+            filterValue: 'stored episode',
+            malformed: false,
+            initialized: true
+        });
+        expect(wrapper.vm.remoteHistory.filter.columnFilters).toEqual({
+            ...initialFilters,
+            providerId: 'malformed provider'
+        });
+        expect(wrapper.vm.remoteHistory.page).toBe(4);
+        expect(wrapper.vm.remoteHistory.sort).toEqual(sortEvent[0].type === 'none' ? [{
+            field: 'actionDate',
+            type: 'desc'
+        }] : sortEvent);
+        expect(wrapper.vm.loadItemsDebounced).toHaveBeenCalledTimes(1);
+        wrapper.destroy();
+    });
+
+    it.each([
+        ['active', [{ field: 'quality', type: 'asc' }]],
+        ['clear-to-default', [{ field: 'actionDate', type: 'none' }]]
+    ])('canonicalizes a malformed Compact Episode filter on the %s sort', async (_name, sortEvent) => {
+        const initialFilters = {
+            resource: 'stored compact episode',
+            statusName: 'Downloaded',
+            clientStatus: 1
+        };
+        const { wrapper, store } = mountCompact({
+            remoteCompact: {
+                page: 4,
+                filter: {
+                    columnFilters: initialFilters
+                }
+            }
+        });
+        const table = wrapper.vm.$refs['compact-history'];
+
+        wrapper.vm.updateResource({
+            currentTarget: {
+                value: '  "  malformed compact episode'
+            }
+        });
+        wrapper.vm.loadItemsDebounced.mockClear();
+        wrapper.vm.remoteHistory.page = 4;
+        store.state.history.remote.page = 7;
+
+        table.emitSort(sortEvent);
+        await wrapper.vm.$nextTick();
+
+        expect(wrapper.find('input[placeholder="Show title or release"]').element.value).toBe('malformed compact episode');
+        expect(store.state.history.episodeFilter).toEqual({
+            inputValue: 'malformed compact episode',
+            filterValue: 'malformed compact episode',
+            malformed: false,
+            initialized: true
+        });
+        expect(wrapper.vm.remoteHistory.filter.columnFilters).toEqual({
+            ...initialFilters,
+            resource: 'malformed compact episode'
+        });
+        expect(wrapper.vm.remoteHistory.page).toBe(4);
+        expect(store.state.history.remote.page).toBe(7);
+        expect(wrapper.vm.remoteHistory.sort).toEqual(sortEvent[0].type === 'none' ? [{
+            field: 'actionDate',
+            type: 'desc'
+        }] : sortEvent);
         expect(wrapper.vm.loadItemsDebounced).toHaveBeenCalledTimes(1);
         wrapper.destroy();
     });
