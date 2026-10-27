@@ -450,6 +450,7 @@ export default {
             return rows;
         };
         return {
+            isLeaving: false,
             invertTable: true,
             subtitleSearchComponents: [],
             columns: [{
@@ -496,7 +497,7 @@ export default {
                 label: 'Size',
                 field: 'file.size',
                 type: 'number',
-                formatFn: humanFileSize,
+                formatFn: bytes => humanFileSize(bytes),
                 hidden: getCookie('Size')
             }, {
                 // For now i'm using a custom function the parse it. As the type: date, isn't working for us.
@@ -542,6 +543,7 @@ export default {
         }),
         ...mapGetters({
             show: 'getCurrentShow',
+            isShowEpisodeCacheStale: 'isShowEpisodeCacheStale',
             getOverviewStatus: 'getOverviewStatus',
             fuzzyParseDateTime: 'fuzzyParseDateTime'
         }),
@@ -597,15 +599,36 @@ export default {
         }
     },
 
+    created() {
+        this.reflowLayout = debounce(this.reflowLayout, 1000);
+    },
     mounted() {
         this.loadShow();
-        ['load', 'resize'].map(event => {
-            return window.addEventListener(event, () => {
-                this.reflowLayout();
-            });
+        ['load', 'resize'].forEach(event => {
+            window.addEventListener(event, this.reflowLayout);
         });
 
-        $(document.body).on('click', '.seasonCheck', event => {
+        $(document.body).on('click', '.seasonCheck', this.toggleSeasonSelection);
+    },
+    beforeDestroy() {
+        this.isLeaving = true;
+        ['load', 'resize'].forEach(event => {
+            window.removeEventListener(event, this.reflowLayout);
+        });
+        this.reflowLayout.cancel();
+        $(document.body).off('click', '.seasonCheck', this.toggleSeasonSelection);
+        const tooltips = $(this.$el).find('[data-hasqtip]');
+        if (tooltips.length > 0) {
+            tooltips.qtip('destroy', true);
+        }
+        // These children are mounted outside the page's rendered component tree.
+        this.subtitleSearchComponents.slice().forEach(instance => {
+            instance.$destroy();
+            instance.$el.remove();
+        });
+    },
+    methods: {
+        toggleSeasonSelection(event) {
             const seasCheck = event.currentTarget;
             const seasNo = $(seasCheck).attr('id');
 
@@ -617,27 +640,33 @@ export default {
                     element.checked = seasCheck.checked;
                 }
             });
-        });
-    },
-    methods: {
+        },
         humanFileSize,
         ...mapActions({
             getShow: 'getShow', // Map `this.getShow()` to `this.$store.dispatch('getShow')`
             getEpisodes: 'getEpisodes',
+            refreshShowFiles: 'refreshShowFiles',
             setCurrentShow: 'setCurrentShow',
             setRecentShow: 'setRecentShow'
         }),
         async loadShow() {
-            const { setCurrentShow, showSlug, initializeEpisodes, getShow } = this;
+            const { setCurrentShow, showSlug, initializeEpisodes, getShow, isShowEpisodeCacheStale, refreshShowFiles } = this;
             // We need detailed info for the xem / scene exceptions, so let's get it.
-            await getShow({ showSlug, detailed: true });
+            const { fileCacheRevision } = await getShow({ showSlug, detailed: true, withFileCacheRevision: true });
+            if (this.isLeaving) {
+                return;
+            }
 
             // Let's tell the store which show we currently want as current.
             // Run this after getShow(), as it will trigger the initializeEpisodes() method.
             setCurrentShow(showSlug);
 
-            // Load all episodes
-            initializeEpisodes();
+            if (isShowEpisodeCacheStale(showSlug)) {
+                await refreshShowFiles({ showSlug, freshDetailsRevision: fileCacheRevision });
+            }
+            if (!this.isLeaving) {
+                initializeEpisodes();
+            }
         },
         statusQualityUpdate(event) {
             const { selectedEpisodes, setStatus, setQuality } = this;
@@ -732,6 +761,13 @@ export default {
                 }
             });
 
+            instance.$once('hook:destroyed', () => {
+                const index = subtitleSearchComponents.indexOf(instance);
+                if (index !== -1) {
+                    subtitleSearchComponents.splice(index, 1);
+                }
+            });
+
             const node = document.createElement('div');
             const tableRef = episode.season === 0 ? 'table-specials' : 'table-seasons';
             this.$refs[tableRef].$refs[`row-${episode.originalIndex}`][0].after(node);
@@ -742,10 +778,10 @@ export default {
         /**
          * Attaches IMDB tooltip
          */
-        reflowLayout: debounce(() => {
+        reflowLayout() {
             console.debug('Reflowing layout');
             addQTip(); // eslint-disable-line no-undef
-        }, 1000),
+        },
         /**
          * Check if any of the episodes in this season does not have the status "unaired".
          * If that's the case we want to manual season search icon.
@@ -951,12 +987,24 @@ export default {
             }
             return pages[page] || [];
         },
-        loadEpisodes(page) {
-            const { showSlug, getEpisodes } = this;
+        isSeasonLoaded(seasonNumber) {
+            const { seasons = [], seasonCount = [] } = this.show;
+            const cached = seasons.find(season => season.season === seasonNumber);
+            const expected = seasonCount.find(season => season.season === seasonNumber);
+            return Boolean(cached && expected && cached.children.length === expected.episodeCount);
+        },
+        loadEpisodes(page, force = false) {
+            const { showSlug, getEpisodes, isSeasonLoaded } = this;
             // Wrap getEpisodes into an async/await function, so we can wait for the season to have been committed
             // before going on to the next one.
             const _getEpisodes = async showSlug => {
                 for (const season of this.neededSeasons(page)) {
+                    if (this.isLeaving) {
+                        return;
+                    }
+                    if (!force && isSeasonLoaded(season)) {
+                        continue;
+                    }
                     // We're waiting for the results by design, to give vue the chance to update the dom.
                     // If we fire all the promises at once for, for example 25 seasons. We'll overload medusa's app
                     // and chance is high a number of requests will timeout.
@@ -967,12 +1015,15 @@ export default {
             _getEpisodes(showSlug);
         },
         initializeEpisodes(force = false) {
-            const { getEpisodes, showSlug, setRecentShow, show } = this;
-            if (force || (!show.seasons && show.seasonCount)) {
+            if (this.isLeaving) {
+                return;
+            }
+            const { getEpisodes, showSlug, setRecentShow, show, isSeasonLoaded } = this;
+            if (show.seasonCount) {
                 // Load episodes for the first page.
-                this.loadEpisodes(1);
-                // Always get special episodes if available.
-                if (show.seasonCount.length > 0 && show.seasonCount[0].season === 0) {
+                this.loadEpisodes(1, force);
+                // Load special episodes when available and not already cached.
+                if (show.seasonCount.some(season => season.season === 0) && (force || !isSeasonLoaded(0))) {
                     getEpisodes({ showSlug, season: 0 });
                 }
             }
@@ -1015,14 +1066,6 @@ export default {
     filters: {
         sceneObjectToString(value) {
             return `${value.season}x${value.episode}`;
-        }
-    },
-    watch: {
-        $route(to, from) {
-            if (to.name === 'show' && from.name === 'testRename') {
-                // Load all episodes if we're coming from the testRename page.
-                this.initializeEpisodes(true);
-            }
         }
     }
 };
