@@ -169,7 +169,7 @@ def test_parse_pubdate(p):
     if ht and isinstance(expected, (int, float)):
         # Allow up to a few seconds difference due to test execution time
         assert abs(expected - actual) <= TOLERANCE_SECONDS, \
-            f"Expected ~{expected}s, got {actual}s (diff {expected - actual}s)"
+            f'Expected ~{expected}s, got {actual}s (diff {expected - actual}s)'
     else:
         assert expected == actual
 
